@@ -28,8 +28,8 @@ func NewContext() (*Context, error) {
 		return nil, err
 	}
 
-	// Load global instance functions (instance=0).
-	instFuncs, err := vk.LoadInstanceFuncs(loader, 0)
+	// Load global functions (only vkCreateInstance available without instance).
+	globalFuncs, err := vk.LoadGlobalFuncs(loader)
 	if err != nil {
 		loader.Close()
 		return nil, err
@@ -51,14 +51,14 @@ func NewContext() (*Context, error) {
 		PApplicationInfo: &appInfo,
 	}
 
-	instance, err := instFuncs.CreateInstance(&createInfo)
+	instance, err := globalFuncs.CreateInstance(&createInfo)
 	if err != nil {
 		loader.Close()
 		return nil, err
 	}
 
-	// Re-load instance functions with the real instance handle.
-	instFuncs, err = vk.LoadInstanceFuncs(loader, instance)
+	// Load all instance functions with the real instance handle.
+	instFuncs, err := vk.LoadInstanceFuncs(loader, instance)
 	if err != nil {
 		loader.Close()
 		return nil, err

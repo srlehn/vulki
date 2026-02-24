@@ -9,17 +9,28 @@ import (
 
 // InstanceFuncs holds instance-level Vulkan function pointers.
 type InstanceFuncs struct {
-	createInstance                       func(pCreateInfo *InstanceCreateInfo, pAllocator uintptr, pInstance *Instance) Result
-	destroyInstance                      func(instance Instance, pAllocator uintptr)
-	enumeratePhysicalDevices             func(instance Instance, pCount *uint32, pDevices *PhysicalDevice) Result
-	getPhysicalDeviceProperties          func(device PhysicalDevice, pProperties *PhysicalDeviceProperties)
-	getPhysicalDeviceQueueFamilyProps    func(device PhysicalDevice, pCount *uint32, pProps *QueueFamilyProperties)
-	getPhysicalDeviceMemoryProperties    func(device PhysicalDevice, pProps *PhysicalDeviceMemoryProperties)
-	createDevice                         func(physicalDevice PhysicalDevice, pCreateInfo *DeviceCreateInfo, pAllocator uintptr, pDevice *Device) Result
-	getDeviceProcAddr                    func(device Device, pName *byte) uintptr
+	createInstance                    func(pCreateInfo *InstanceCreateInfo, pAllocator uintptr, pInstance *Instance) Result
+	destroyInstance                   func(instance Instance, pAllocator uintptr)
+	enumeratePhysicalDevices          func(instance Instance, pCount *uint32, pDevices *PhysicalDevice) Result
+	getPhysicalDeviceProperties       func(device PhysicalDevice, pProperties *PhysicalDeviceProperties)
+	getPhysicalDeviceQueueFamilyProps func(device PhysicalDevice, pCount *uint32, pProps *QueueFamilyProperties)
+	getPhysicalDeviceMemoryProperties func(device PhysicalDevice, pProps *PhysicalDeviceMemoryProperties)
+	createDevice                      func(physicalDevice PhysicalDevice, pCreateInfo *DeviceCreateInfo, pAllocator uintptr, pDevice *Device) Result
+	getDeviceProcAddr                 func(device Device, pName *byte) uintptr
 }
 
-// LoadInstanceFuncs resolves instance-level functions. Pass 0 for Instance to get global functions.
+// LoadGlobalFuncs resolves only vkCreateInstance (available without an instance).
+func LoadGlobalFuncs(l *Loader) (*InstanceFuncs, error) {
+	f := &InstanceFuncs{}
+	addr := l.GetInstanceProcAddr(0, "vkCreateInstance")
+	if addr == 0 {
+		return nil, fmt.Errorf("vk: vkCreateInstance not found")
+	}
+	purego.RegisterFunc(&f.createInstance, addr)
+	return f, nil
+}
+
+// LoadInstanceFuncs resolves all instance-level functions using a real instance handle.
 func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 	f := &InstanceFuncs{}
 
@@ -32,29 +43,24 @@ func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 		return nil
 	}
 
-	if err := resolve(&f.createInstance, "vkCreateInstance"); err != nil {
-		return nil, err
+	entries := []struct {
+		target interface{}
+		name   string
+	}{
+		{&f.createInstance, "vkCreateInstance"},
+		{&f.destroyInstance, "vkDestroyInstance"},
+		{&f.enumeratePhysicalDevices, "vkEnumeratePhysicalDevices"},
+		{&f.getPhysicalDeviceProperties, "vkGetPhysicalDeviceProperties"},
+		{&f.getPhysicalDeviceQueueFamilyProps, "vkGetPhysicalDeviceQueueFamilyProperties"},
+		{&f.getPhysicalDeviceMemoryProperties, "vkGetPhysicalDeviceMemoryProperties"},
+		{&f.createDevice, "vkCreateDevice"},
+		{&f.getDeviceProcAddr, "vkGetDeviceProcAddr"},
 	}
-	if err := resolve(&f.destroyInstance, "vkDestroyInstance"); err != nil {
-		return nil, err
-	}
-	if err := resolve(&f.enumeratePhysicalDevices, "vkEnumeratePhysicalDevices"); err != nil {
-		return nil, err
-	}
-	if err := resolve(&f.getPhysicalDeviceProperties, "vkGetPhysicalDeviceProperties"); err != nil {
-		return nil, err
-	}
-	if err := resolve(&f.getPhysicalDeviceQueueFamilyProps, "vkGetPhysicalDeviceQueueFamilyProperties"); err != nil {
-		return nil, err
-	}
-	if err := resolve(&f.getPhysicalDeviceMemoryProperties, "vkGetPhysicalDeviceMemoryProperties"); err != nil {
-		return nil, err
-	}
-	if err := resolve(&f.createDevice, "vkCreateDevice"); err != nil {
-		return nil, err
-	}
-	if err := resolve(&f.getDeviceProcAddr, "vkGetDeviceProcAddr"); err != nil {
-		return nil, err
+
+	for _, e := range entries {
+		if err := resolve(e.target, e.name); err != nil {
+			return nil, err
+		}
 	}
 
 	return f, nil
@@ -70,7 +76,9 @@ func (f *InstanceFuncs) CreateInstance(info *InstanceCreateInfo) (Instance, erro
 }
 
 func (f *InstanceFuncs) DestroyInstance(instance Instance) {
-	f.destroyInstance(instance, 0)
+	if f.destroyInstance != nil {
+		f.destroyInstance(instance, 0)
+	}
 }
 
 func (f *InstanceFuncs) EnumeratePhysicalDevices(instance Instance) ([]PhysicalDevice, error) {
