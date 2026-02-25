@@ -1,7 +1,8 @@
 module vkpg
 
-go 1.25.0
+go 1.26.0
 
-require github.com/ebitengine/purego v0.10.0
-
-require github.com/gogpu/naga v0.14.2 // indirect
+require (
+	github.com/ebitengine/purego v0.10.0
+	github.com/gogpu/naga v0.14.2
+)
