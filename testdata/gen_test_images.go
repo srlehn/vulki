@@ -44,16 +44,17 @@ func fmtf(f float64) string {
 }
 
 func (t testImage) convertArgs(w, h int) []string {
-	// SRT format: ox,oy scaleX,scaleY angle tx,ty
-	// Use image center as origin so rotation/scale preserve content.
+	// SRT format: cx,cy scaleX,scaleY angle newX,newY
+	// Negate angle: ImageMagick SRT positive=CW, our convention positive=CCW.
+	// newX,newY = cx+tx, cy+ty to keep center and apply translation.
 	cx, cy := w/2, h/2
 	srt := fmt.Sprintf("%d,%d %s,%s %s %d,%d",
 		cx, cy,
 		fmtf(t.scaleX), fmtf(t.scaleY),
-		fmtf(t.rotationDeg),
-		t.tx, t.ty,
+		fmtf(-t.rotationDeg),
+		cx+t.tx, cy+t.ty,
 	)
-	return []string{"-distort", "SRT", srt}
+	return []string{"-virtual-pixel", "edge", "-distort", "SRT", srt}
 }
 
 var images = []testImage{
@@ -79,7 +80,7 @@ func main() {
 
 	for _, img := range images {
 		name := img.filename()
-		args := []string{src, "-virtual-pixel", "black", "-background", "black"}
+		args := []string{src}
 		args = append(args, img.convertArgs(srcW, srcH)...)
 		args = append(args, "+repage", name)
 		cmd := exec.Command("convert", args...)

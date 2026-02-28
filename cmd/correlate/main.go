@@ -111,15 +111,17 @@ func runSelfTest(path string, save bool) error {
 	defer os.Remove(tmpPath)
 
 	cx, cy := w/2, h/2
+	// SRT format: cx,cy scaleX,scaleY angle newX,newY
+	// Negate angle: ImageMagick SRT positive=CW, our convention positive=CCW.
+	// newX,newY = cx+tx, cy+ty to keep center and apply translation.
 	srt := fmt.Sprintf("%d,%d %s,%s %s %d,%d",
 		cx, cy,
 		fmtf(gtScale), fmtf(gtScale),
-		fmtf(gtRot),
-		gtTx, gtTy,
+		fmtf(-gtRot),
+		cx+gtTx, cy+gtTy,
 	)
 	cmd := exec.Command("convert", path,
-		"-virtual-pixel", "black",
-		"-background", "black",
+		"-virtual-pixel", "edge",
 		"-distort", "SRT", srt,
 		"+repage", tmpPath,
 	)

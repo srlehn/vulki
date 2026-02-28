@@ -15,18 +15,21 @@ struct Params {
 const PI: f32 = 3.14159265358979323846;
 
 fn sample_bilinear(x: f32, y: f32) -> f32 {
-    let x0 = u32(floor(x));
-    let y0 = u32(floor(y));
-    let x1 = x0 + 1u;
-    let y1 = y0 + 1u;
-    let fx = x - floor(x);
-    let fy = y - floor(y);
+    // Clamp to valid range (matching scikit-image behavior on fftshifted data).
+    let cx = clamp(x, 0.0, f32(params.src_w - 1u));
+    let cy = clamp(y, 0.0, f32(params.src_h - 1u));
 
-    // Wrap to valid range.
-    let cx0 = x0 % params.src_w;
-    let cx1 = x1 % params.src_w;
-    let cy0 = y0 % params.src_h;
-    let cy1 = y1 % params.src_h;
+    let x0 = u32(floor(cx));
+    let y0 = u32(floor(cy));
+    let x1 = min(x0 + 1u, params.src_w - 1u);
+    let y1 = min(y0 + 1u, params.src_h - 1u);
+    let fx = cx - floor(cx);
+    let fy = cy - floor(cy);
+
+    let cx0 = x0;
+    let cx1 = x1;
+    let cy0 = y0;
+    let cy1 = y1;
 
     let v00 = src[cy0 * params.src_w + cx0];
     let v10 = src[cy0 * params.src_w + cx1];
@@ -49,21 +52,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let xi = idx % params.dst_w;
     let yi = idx / params.dst_w;
 
-    // Log-polar mapping (full 360° range, matching scikit-image convention).
+    // Log-polar mapping (180° range; magnitude spectrum has 180° symmetry).
     let log_r = f32(xi) / f32(params.dst_w) * params.log_rmax;
-    let theta = f32(yi) / f32(params.dst_h) * 2.0 * PI;
+    let theta = f32(yi) / f32(params.dst_h) * PI;
     let r = exp(log_r);
 
-    // Sample from DC (origin) of magnitude spectrum with wraparound.
-    let sx = ((r * cos(theta)) % f32(params.src_w) + f32(params.src_w)) % f32(params.src_w);
-    let sy = ((r * sin(theta)) % f32(params.src_h) + f32(params.src_h)) % f32(params.src_h);
+    // Sample from center of fftshifted magnitude spectrum.
+    let cx = f32(params.src_w) / 2.0;
+    let cy = f32(params.src_h) / 2.0;
+    let sx = cx + r * cos(theta);
+    let sy = cy + r * sin(theta);
 
     let val = sample_bilinear(sx, sy);
 
-    // Apply Hann window in the log-r (x) direction to suppress spectral leakage.
-    // The theta (y) direction is periodic due to magnitude spectrum symmetry.
-    let wx = 0.5 * (1.0 - cos(2.0 * PI * f32(xi) / f32(params.dst_w)));
-
-    // Store as complex with zero imaginary part.
-    dst[idx] = vec2<f32>(val * wx, 0.0);
+    // Store as complex with zero imaginary part (no windowing, matching scikit-image).
+    dst[idx] = vec2<f32>(val, 0.0);
 }

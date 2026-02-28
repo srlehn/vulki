@@ -32,6 +32,9 @@ var highpassWGSL string
 //go:embed shaders/logpolar.wgsl
 var logpolarWGSL string
 
+//go:embed shaders/fftshift.wgsl
+var fftshiftWGSL string
+
 //go:embed shaders/crosspower.wgsl
 var crosspowerWGSL string
 
@@ -60,6 +63,7 @@ type Correlator struct {
 	spirvMagnitude  []byte
 	spirvHighpass   []byte
 	spirvLogpolar   []byte
+	spirvFftshift   []byte
 	spirvCrosspower []byte
 
 	// Working buffers.
@@ -77,6 +81,7 @@ type Correlator struct {
 	pipeBitrevA, pipeBitrevB         *compute.Pipeline
 	pipeButterflyA, pipeButterflyB   *compute.Pipeline
 	pipeMagA, pipeMagB               *compute.Pipeline
+	pipeFftshiftA, pipeFftshiftB     *compute.Pipeline
 	pipeHighpassA, pipeHighpassB     *compute.Pipeline
 	pipeLogPolA, pipeLogPolB         *compute.Pipeline
 	pipeBitrevLPA, pipeBitrevLPB     *compute.Pipeline
@@ -92,9 +97,11 @@ type Correlator struct {
 func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 	c := &Correlator{ctx: ctx}
 
-	// Padded dimensions.
-	c.w = nextPow2(maxW)
-	c.h = nextPow2(maxH)
+	// Square crop + minimal padding: crop to min(w,h) then pad to next power of 2.
+	// This preserves spectral symmetry and avoids excessive zero-padding.
+	padSize := nextPow2(min(maxW, maxH))
+	c.w = padSize
+	c.h = padSize
 	c.lpW = c.w
 	c.lpH = c.h
 
@@ -113,6 +120,7 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		{&c.spirvBitrev, fftBitrevWGSL, "fft_bitrev"},
 		{&c.spirvButterfly, fftButterflyWGSL, "fft_butterfly"},
 		{&c.spirvMagnitude, magnitudeWGSL, "magnitude"},
+		{&c.spirvFftshift, fftshiftWGSL, "fftshift"},
 		{&c.spirvHighpass, highpassWGSL, "highpass"},
 		{&c.spirvLogpolar, logpolarWGSL, "logpolar"},
 		{&c.spirvCrosspower, crosspowerWGSL, "crosspower"},
@@ -281,6 +289,20 @@ func (c *Correlator) createPipelines() error {
 		return err
 	}
 
+	// Fftshift: binding 0=mag(rw), 1=params
+	c.pipeFftshiftA, err = mk(c.spirvFftshift, []compute.BufferBinding{
+		bb(0, c.magA.Buf), bb(1, paramBuf),
+	})
+	if err != nil {
+		return err
+	}
+	c.pipeFftshiftB, err = mk(c.spirvFftshift, []compute.BufferBinding{
+		bb(0, c.magB.Buf), bb(1, paramBuf),
+	})
+	if err != nil {
+		return err
+	}
+
 	// Highpass: binding 0=mag(rw), 1=params
 	c.pipeHighpassA, err = mk(c.spirvHighpass, []compute.BufferBinding{
 		bb(0, c.magA.Buf), bb(1, paramBuf),
@@ -367,60 +389,21 @@ func (c *Correlator) createPipelines() error {
 
 // PhaseCorrelate recovers rotation, scale, and translation between two images.
 func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
+	// Determine square crop size from the smaller dimension of each image.
+	cropSize := min(imgA.Bounds().Dx(), imgA.Bounds().Dy(),
+		imgB.Bounds().Dx(), imgB.Bounds().Dy())
+
 	wgSize := uint32(64)
 	n := uint32(c.w * c.h)
 	groups := (n + wgSize - 1) / wgSize
 	paramsBuf := c.params.DeviceBuffer
 
-	// Pad and upload images.
-	pixA := padImageToRGBA(imgA, c.w, c.h)
-	pixB := padImageToRGBA(imgB, c.w, c.h)
-	if err := c.rgbaA.UploadSlice(c.ctx, pixA); err != nil {
-		return nil, err
-	}
-	if err := c.rgbaB.UploadSlice(c.ctx, pixB); err != nil {
-		return nil, err
-	}
+	// Crop images to centered squares, apply DoG+Hann, pad to power-of-2.
+	grayAData := cropDogHannPad(imgA, cropSize, c.w)
+	grayBData := cropDogHannPad(imgB, cropSize, c.w)
 
 	// ---- Phase 1: Rotation & Scale ----
-	rec, err := c.ctx.NewCommandRecorder()
-	if err != nil {
-		return nil, err
-	}
-
-	whParams := encodeU32Params(uint32(c.w), uint32(c.h))
-
-	// Grayscale A & B.
-	rec.UpdateBuffer(paramsBuf, 0, whParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	rec.Bind(c.pipeGrayscaleA)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.grayA.Buf.DeviceBuffer)
-	rec.Bind(c.pipeGrayscaleB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.grayB.Buf.DeviceBuffer)
-
-	// Hann window A & B.
-	rec.Bind(c.pipeHannA)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.grayA.Buf.DeviceBuffer)
-	rec.Bind(c.pipeHannB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.grayB.Buf.DeviceBuffer)
-
-	if err := rec.Submit(); err != nil {
-		return nil, fmt.Errorf("imgproc: phase1 preprocess: %w", err)
-	}
-
-	// Download grayscale, convert to complex, upload.
-	grayAData, err := c.grayA.DownloadSlice(c.ctx)
-	if err != nil {
-		return nil, err
-	}
-	grayBData, err := c.grayB.DownloadSlice(c.ctx)
-	if err != nil {
-		return nil, err
-	}
+	// Upload preprocessed grayscale as complex for FFT.
 	if err := c.complexA.UploadSlice(c.ctx, realToComplex(grayAData)); err != nil {
 		return nil, err
 	}
@@ -429,7 +412,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	}
 
 	// FFT2D on complexA and complexB.
-	rec, err = c.ctx.NewCommandRecorder()
+	rec, err := c.ctx.NewCommandRecorder()
 	if err != nil {
 		return nil, err
 	}
@@ -447,8 +430,21 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Dispatch(groups, 1, 1)
 	rec.Barrier(c.magB.Buf.DeviceBuffer)
 
-	// Log-polar remap. Radius = half-diagonal, matching scikit-image default.
-	maxRadius := math.Sqrt(float64(c.w*c.w+c.h*c.h)) / 2.0
+	// Fftshift magnitude spectra so DC is at center.
+	shiftParams := encodeU32Params(uint32(c.w), uint32(c.h))
+	rec.UpdateBuffer(paramsBuf, 0, shiftParams)
+	rec.BarrierTransferToCompute(paramsBuf)
+	halfN := n / 2
+	shiftGroups := (halfN + wgSize - 1) / wgSize
+	rec.Bind(c.pipeFftshiftA)
+	rec.Dispatch(shiftGroups, 1, 1)
+	rec.Barrier(c.magA.Buf.DeviceBuffer)
+	rec.Bind(c.pipeFftshiftB)
+	rec.Dispatch(shiftGroups, 1, 1)
+	rec.Barrier(c.magB.Buf.DeviceBuffer)
+
+	// Log-polar remap. Limited radius following scikit-image (shape[0]//8).
+	maxRadius := float64(cropSize) / 8.0
 	logRmax := float32(math.Log(maxRadius))
 	lpParams := encodeLogPolarParams(uint32(c.w), uint32(c.h), uint32(c.lpW), uint32(c.lpH), logRmax)
 	rec.UpdateBuffer(paramsBuf, 0, lpParams)
@@ -488,6 +484,8 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	}
 	normalizeComplex(cpData[:lpN], c.lpW*c.lpH)
 	peakX, peakY := find2DPeak(cpData[:lpN], c.lpW, c.lpH)
+	fmt.Printf("DEBUG: raw peak (%f, %f) lpW=%d lpH=%d maxR=%.2f cropSize=%d\n",
+		peakX, peakY, c.lpW, c.lpH, maxRadius, cropSize)
 
 	// Handle wraparound: if peak is in second half, subtract N.
 	if peakX > float64(c.lpW)/2 {
@@ -503,35 +501,11 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	// Rotate+scale imgB to undo the found transform on CPU.
 	warpedB := BilinearWarp(imgB, angle, scale)
 
-	// Re-upload warped image.
-	pixBWarped := padImageToRGBA(warpedB, c.w, c.h)
-	if err := c.rgbaB.UploadSlice(c.ctx, pixBWarped); err != nil {
-		return nil, err
-	}
+	// Preprocess warped B with same square crop + DoG + Hann + pad pipeline.
+	grayBData = cropDogHannPad(warpedB, cropSize, c.w)
 
-	// Re-run grayscale + hann on B (A is still in grayA).
-	rec, err = c.ctx.NewCommandRecorder()
-	if err != nil {
-		return nil, err
-	}
-	rec.UpdateBuffer(paramsBuf, 0, whParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	rec.Bind(c.pipeGrayscaleB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.grayB.Buf.DeviceBuffer)
-	rec.Bind(c.pipeHannB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.grayB.Buf.DeviceBuffer)
-	if err := rec.Submit(); err != nil {
-		return nil, fmt.Errorf("imgproc: phase2 preprocess: %w", err)
-	}
-
-	// Re-upload both as complex for translation FFT.
-	// Re-download grayA (still valid from phase 1) and new grayB.
-	grayBData, err = c.grayB.DownloadSlice(c.ctx)
-	if err != nil {
-		return nil, err
-	}
+	// Upload both as complex for translation FFT.
+	// grayAData is still valid from phase 1.
 	if err := c.complexA.UploadSlice(c.ctx, realToComplex(grayAData)); err != nil {
 		return nil, err
 	}
