@@ -33,34 +33,35 @@ const (
 
 // Structure types (sType values).
 const (
-	StructureTypeApplicationInfo                = 0
-	StructureTypeInstanceCreateInfo             = 1
-	StructureTypeDeviceQueueCreateInfo          = 2
-	StructureTypeDeviceCreateInfo               = 3
-	StructureTypeSubmitInfo                     = 4
-	StructureTypeMemoryAllocateInfo             = 5
-	StructureTypeMappedMemoryRange              = 6
-	StructureTypeBufferCreateInfo               = 12
-	StructureTypeShaderModuleCreateInfo         = 16
-	StructureTypeComputePipelineCreateInfo      = 29
-	StructureTypePipelineShaderStageCreateInfo  = 18
-	StructureTypePipelineLayoutCreateInfo       = 30
-	StructureTypeDescriptorSetLayoutCreateInfo  = 32
-	StructureTypeDescriptorPoolCreateInfo       = 33
-	StructureTypeDescriptorSetAllocateInfo      = 34
-	StructureTypeWriteDescriptorSet             = 35
-	StructureTypeCommandPoolCreateInfo          = 39
-	StructureTypeCommandBufferAllocateInfo      = 40
-	StructureTypeCommandBufferBeginInfo         = 42
-	StructureTypeFenceCreateInfo                = 8
-	StructureTypeBufferMemoryBarrier            = 44
-	StructureTypeMemoryBarrier                  = 46
+	StructureTypeApplicationInfo               = 0
+	StructureTypeInstanceCreateInfo            = 1
+	StructureTypeDeviceQueueCreateInfo         = 2
+	StructureTypeDeviceCreateInfo              = 3
+	StructureTypeSubmitInfo                    = 4
+	StructureTypeMemoryAllocateInfo            = 5
+	StructureTypeMappedMemoryRange             = 6
+	StructureTypeFenceCreateInfo               = 8
+	StructureTypeBufferCreateInfo              = 12
+	StructureTypeShaderModuleCreateInfo        = 16
+	StructureTypeComputePipelineCreateInfo     = 29
+	StructureTypePipelineShaderStageCreateInfo = 18
+	StructureTypePipelineLayoutCreateInfo      = 30
+	StructureTypeDescriptorSetLayoutCreateInfo = 32
+	StructureTypeDescriptorPoolCreateInfo      = 33
+	StructureTypeDescriptorSetAllocateInfo     = 34
+	StructureTypeWriteDescriptorSet            = 35
+	StructureTypeCommandPoolCreateInfo         = 39
+	StructureTypeCommandBufferAllocateInfo     = 40
+	StructureTypeCommandBufferBeginInfo        = 42
+	StructureTypeBufferMemoryBarrier           = 44
+	StructureTypeMemoryBarrier                 = 46
 )
 
 // Buffer usage flags.
 const (
-	BufferUsageTransferSrcBit = 0x00000001
-	BufferUsageTransferDstBit = 0x00000002
+	BufferUsageTransferSrcBit   = 0x00000001
+	BufferUsageTransferDstBit   = 0x00000002
+	BufferUsageUniformBufferBit = 0x00000010
 	BufferUsageStorageBufferBit = 0x00000020
 )
 
@@ -110,11 +111,13 @@ const (
 
 // Access flags.
 const (
-	AccessShaderWriteBit  = 0x00000040
-	AccessTransferReadBit = 0x00000800
-	AccessShaderReadBit   = 0x00000020
+	AccessShaderReadBit    = 0x00000020
+	AccessShaderWriteBit   = 0x00000040
+	AccessTransferReadBit  = 0x00000800
 	AccessTransferWriteBit = 0x00001000
-	AccessHostReadBit     = 0x00002000
+	AccessHostReadBit      = 0x00002000
+	AccessMemoryReadBit    = 0x00008000
+	AccessMemoryWriteBit   = 0x00010000
 )
 
 // Pipeline stage flags.
@@ -399,14 +402,14 @@ type QueueFamilyProperties struct {
 }
 
 type PhysicalDeviceProperties struct {
-	ApiVersion    uint32
-	DriverVersion uint32
-	VendorID      uint32
-	DeviceID      uint32
-	DeviceType    uint32
-	DeviceName    [256]byte
-	_             [16]byte // pipelineCacheUUID
-	Limits        [504]byte
+	ApiVersion       uint32
+	DriverVersion    uint32
+	VendorID         uint32
+	DeviceID         uint32
+	DeviceType       uint32
+	DeviceName       [256]byte
+	_                [16]byte // pipelineCacheUUID
+	Limits           [504]byte
 	SparseProperties [20]byte
 }
 

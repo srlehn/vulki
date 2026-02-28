@@ -49,6 +49,7 @@ type DeviceFuncs struct {
 	flushMappedMemoryRanges     func(device Device, rangeCount uint32, pRanges *MappedMemoryRange) Result
 	invalidateMappedMemoryRanges func(device Device, rangeCount uint32, pRanges *MappedMemoryRange) Result
 	deviceWaitIdle              func(device Device) Result
+	cmdUpdateBuffer             func(cb CommandBuffer, dst Buffer, offset uint64, dataSize uint64, pData unsafe.Pointer)
 }
 
 // LoadDeviceFuncs resolves device-level functions via vkGetDeviceProcAddr.
@@ -110,6 +111,7 @@ func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, err
 		{&f.flushMappedMemoryRanges, "vkFlushMappedMemoryRanges"},
 		{&f.invalidateMappedMemoryRanges, "vkInvalidateMappedMemoryRanges"},
 		{&f.deviceWaitIdle, "vkDeviceWaitIdle"},
+		{&f.cmdUpdateBuffer, "vkCmdUpdateBuffer"},
 	}
 
 	for _, e := range entries {
@@ -393,4 +395,8 @@ func (f *DeviceFuncs) DeviceWaitIdle(device Device) error {
 		return fmt.Errorf("vkDeviceWaitIdle failed: %d", res)
 	}
 	return nil
+}
+
+func (f *DeviceFuncs) CmdUpdateBuffer(cb CommandBuffer, dst Buffer, offset uint64, data []byte) {
+	f.cmdUpdateBuffer(cb, dst, offset, uint64(len(data)), unsafe.Pointer(&data[0]))
 }
