@@ -735,8 +735,8 @@ func TestPhase1_RotationDetection(t *testing.T) {
 	ctx := testContext(t)
 
 	// Load real images.
-	imgA := loadTestImage(t, "testdata/snake.png")
-	imgB := loadTestImage(t, "testdata/snake_rotated.png") // 12° rotation
+	imgA := loadTestImage(t, "../testdata/snake.png")
+	imgB := loadTestImage(t, "../testdata/snake_rot_12deg.png")
 
 	maxW := imgA.Bounds().Dx()
 	maxH := imgA.Bounds().Dy()

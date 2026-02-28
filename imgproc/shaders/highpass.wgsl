@@ -20,7 +20,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let x = idx % params.width;
     let y = idx / params.width;
-    let hx = 1.0 - cos(PI * f32(x) / f32(params.width));
-    let hy = 1.0 - cos(PI * f32(y) / f32(params.height));
+    let hx = 1.0 - cos(2.0 * PI * f32(x) / f32(params.width));
+    let hy = 1.0 - cos(2.0 * PI * f32(y) / f32(params.height));
     data[idx] = data[idx] * hx * hy;
 }
