@@ -43,9 +43,12 @@ func fmtf(f float64) string {
 	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
-func (t testImage) convertArgs() []string {
+func (t testImage) convertArgs(w, h int) []string {
 	// SRT format: ox,oy scaleX,scaleY angle tx,ty
-	srt := fmt.Sprintf("0,0 %s,%s %s %d,%d",
+	// Use image center as origin so rotation/scale preserve content.
+	cx, cy := w/2, h/2
+	srt := fmt.Sprintf("%d,%d %s,%s %s %d,%d",
+		cx, cy,
 		fmtf(t.scaleX), fmtf(t.scaleY),
 		fmtf(t.rotationDeg),
 		t.tx, t.ty,
@@ -65,10 +68,19 @@ var images = []testImage{
 func main() {
 	src := "testdata/snake.png"
 
+	// Get source image dimensions.
+	out, err := exec.Command("identify", "-format", "%w %h", src).Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "identify %s: %v\n", src, err)
+		os.Exit(1)
+	}
+	var srcW, srcH int
+	fmt.Sscanf(string(out), "%d %d", &srcW, &srcH)
+
 	for _, img := range images {
 		name := img.filename()
 		args := []string{src, "-virtual-pixel", "black", "-background", "black"}
-		args = append(args, img.convertArgs()...)
+		args = append(args, img.convertArgs(srcW, srcH)...)
 		args = append(args, "+repage", name)
 		cmd := exec.Command("convert", args...)
 		cmd.Stderr = os.Stderr

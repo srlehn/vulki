@@ -60,6 +60,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let val = sample_bilinear(sx, sy);
 
+    // Apply Hann window in the log-r (x) direction to suppress spectral leakage.
+    // The theta (y) direction is periodic due to magnitude spectrum symmetry.
+    let wx = 0.5 * (1.0 - cos(2.0 * PI * f32(xi) / f32(params.dst_w)));
+
     // Store as complex with zero imaginary part.
-    dst[idx] = vec2<f32>(val, 0.0);
+    dst[idx] = vec2<f32>(val * wx, 0.0);
 }

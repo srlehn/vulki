@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"time"
 	"vkpg/compute"
 	"vkpg/imgproc"
 )
@@ -109,7 +110,9 @@ func runSelfTest(path string, save bool) error {
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	srt := fmt.Sprintf("0,0 %s,%s %s %d,%d",
+	cx, cy := w/2, h/2
+	srt := fmt.Sprintf("%d,%d %s,%s %s %d,%d",
+		cx, cy,
 		fmtf(gtScale), fmtf(gtScale),
 		fmtf(gtRot),
 		gtTx, gtTy,
@@ -148,12 +151,15 @@ func runSelfTest(path string, save bool) error {
 	defer corr.Close()
 
 	fmt.Println("Running phase correlation...")
+	t0 := time.Now()
 	result, err := corr.PhaseCorrelate(imgA, imgB)
 	if err != nil {
 		return fmt.Errorf("phase correlate: %w", err)
 	}
+	elapsed := time.Since(t0)
 
 	fmt.Println()
+	fmt.Printf("Phase correlation took %v\n", elapsed)
 	fmt.Printf("Ground truth: tx=%d  ty=%d  rot=%.2f°  scale=%.4f\n", gtTx, gtTy, gtRot, gtScale)
 	fmt.Printf("Detected:     tx=%.2f  ty=%.2f  rot=%.2f°  scale=%.4f\n", result.Tx, result.Ty, result.Angle, result.Scale)
 	fmt.Printf("Error:        tx=%.2f  ty=%.2f  rot=%.2f°  scale=%.4f\n",

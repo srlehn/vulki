@@ -59,10 +59,12 @@ func find2DPeak(data [][2]float32, w, h int) (float64, float64) {
 }
 
 // logPolarToAngleScale converts a peak in log-polar correlation space to angle and scale.
+// The cross-power IFFT peaks at the negative of the actual shift in log-polar space,
+// so we negate both: angle = -peakY and scale = exp(-peakX).
 func logPolarToAngleScale(peakX, peakY float64, lpW, lpH int, maxRadius float64) (angle, scale float64) {
-	angle = peakY / float64(lpH) * 180.0
+	angle = -peakY / float64(lpH) * 180.0
 	logRmax := math.Log(maxRadius)
-	scale = math.Exp(peakX / float64(lpW) * logRmax)
+	scale = math.Exp(-peakX / float64(lpW) * logRmax)
 	return angle, scale
 }
 
