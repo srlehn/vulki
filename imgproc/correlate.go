@@ -559,9 +559,9 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 			pty -= float64(c.h)
 		}
 
-		// The peak directly gives the translation (no rotation correction
-		// needed since we transformed imgA to match imgB's rotation+scale).
-		return transResult{tryAngle, tryScale, ptx, pty, peakMag}, nil
+		// Negate: cross-power F(A)*conj(F(B)) with B=A shifted by t
+		// gives peak at -t, so negate to recover the actual translation.
+		return transResult{tryAngle, tryScale, -ptx, -pty, peakMag}, nil
 	}
 
 	res1, err := tryTranslation(angle, scale)
