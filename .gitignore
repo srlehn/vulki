@@ -1,1 +1,6 @@
 *.md
+correlate
+demo
+testdata/scikit-image/
+testdata/venv/
+selftest_*.png
