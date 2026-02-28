@@ -22,11 +22,11 @@ fn sample_bilinear(x: f32, y: f32) -> f32 {
     let fx = x - floor(x);
     let fy = y - floor(y);
 
-    // Clamp to valid range.
-    let cx0 = min(x0, params.src_w - 1u);
-    let cx1 = min(x1, params.src_w - 1u);
-    let cy0 = min(y0, params.src_h - 1u);
-    let cy1 = min(y1, params.src_h - 1u);
+    // Wrap to valid range.
+    let cx0 = x0 % params.src_w;
+    let cx1 = x1 % params.src_w;
+    let cy0 = y0 % params.src_h;
+    let cy1 = y1 % params.src_h;
 
     let v00 = src[cy0 * params.src_w + cx0];
     let v10 = src[cy0 * params.src_w + cx1];
@@ -54,17 +54,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let theta = f32(yi) / f32(params.dst_h) * PI;
     let r = exp(log_r);
 
-    // Sample from center of magnitude spectrum (implicit FFT shift).
-    let cx = f32(params.src_w) * 0.5;
-    let cy = f32(params.src_h) * 0.5;
-    let sx = cx + r * cos(theta);
-    let sy = cy + r * sin(theta);
+    // Sample from DC (origin) of magnitude spectrum with wraparound.
+    let sx = ((r * cos(theta)) % f32(params.src_w) + f32(params.src_w)) % f32(params.src_w);
+    let sy = ((r * sin(theta)) % f32(params.src_h) + f32(params.src_h)) % f32(params.src_h);
 
-    // Boundary check — output 0 if out of range.
-    var val = 0.0;
-    if sx >= 0.0 && sx < f32(params.src_w) - 1.0 && sy >= 0.0 && sy < f32(params.src_h) - 1.0 {
-        val = sample_bilinear(sx, sy);
-    }
+    let val = sample_bilinear(sx, sy);
 
     // Store as complex with zero imaginary part.
     dst[idx] = vec2<f32>(val, 0.0);

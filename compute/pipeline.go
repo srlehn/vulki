@@ -150,17 +150,22 @@ func (c *Context) CreateComputePipeline(spirv []byte, bindings []BufferBinding) 
 func (p *Pipeline) Destroy(ctx *Context) {
 	if p.Pipeline != 0 {
 		ctx.DevFuncs.DestroyPipeline(ctx.Device, p.Pipeline)
+		p.Pipeline = 0
 	}
 	if p.DescPool != 0 {
 		ctx.DevFuncs.DestroyDescriptorPool(ctx.Device, p.DescPool)
+		p.DescPool = 0
 	}
 	if p.PipelineLayout != 0 {
 		ctx.DevFuncs.DestroyPipelineLayout(ctx.Device, p.PipelineLayout)
+		p.PipelineLayout = 0
 	}
 	if p.DescSetLayout != 0 {
 		ctx.DevFuncs.DestroyDescriptorSetLayout(ctx.Device, p.DescSetLayout)
+		p.DescSetLayout = 0
 	}
 	if p.ShaderModule != 0 {
 		ctx.DevFuncs.DestroyShaderModule(ctx.Device, p.ShaderModule)
+		p.ShaderModule = 0
 	}
 }

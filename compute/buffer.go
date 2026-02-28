@@ -134,9 +134,11 @@ func (b *Buffer) Download(ctx *Context, size uint64) ([]byte, error) {
 func (b *Buffer) Destroy(ctx *Context) {
 	if b.StagingBuffer != 0 {
 		ctx.DevFuncs.DestroyBuffer(ctx.Device, b.StagingBuffer)
+		b.StagingBuffer = 0
 	}
 	if b.StagingMemory != 0 {
 		ctx.DevFuncs.FreeMemory(ctx.Device, b.StagingMemory)
+		b.StagingMemory = 0
 	}
 	b.destroyDevice(ctx)
 }
@@ -144,9 +146,11 @@ func (b *Buffer) Destroy(ctx *Context) {
 func (b *Buffer) destroyDevice(ctx *Context) {
 	if b.DeviceBuffer != 0 {
 		ctx.DevFuncs.DestroyBuffer(ctx.Device, b.DeviceBuffer)
+		b.DeviceBuffer = 0
 	}
 	if b.DeviceMemory != 0 {
 		ctx.DevFuncs.FreeMemory(ctx.Device, b.DeviceMemory)
+		b.DeviceMemory = 0
 	}
 }
 

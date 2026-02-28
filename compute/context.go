@@ -149,11 +149,15 @@ func NewContext() (*Context, error) {
 func (c *Context) Close() {
 	if c.Device != 0 {
 		c.DevFuncs.DeviceWaitIdle(c.Device)
+		c.DevFuncs.DestroyDevice(c.Device)
+		c.Device = 0
 	}
 	if c.Instance != 0 {
 		c.InstFuncs.DestroyInstance(c.Instance)
+		c.Instance = 0
 	}
 	if c.Loader != nil {
 		c.Loader.Close()
+		c.Loader = nil
 	}
 }

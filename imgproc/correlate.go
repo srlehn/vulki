@@ -347,15 +347,16 @@ func (c *Correlator) createPipelines() error {
 		return err
 	}
 
-	// Crosspower: binding 0=a(read), 1=b(read), 2=out(write), 3=params
+	// Crosspower: binding 0=b(read), 1=a(read), 2=out(write), 3=params
+	// We compute B*conj(A) so that IFFT peaks at +shift (not -shift).
 	c.pipeCrosspowerLP, err = mk(c.spirvCrosspower, []compute.BufferBinding{
-		bb(0, c.logPolA.Buf), bb(1, c.logPolB.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
+		bb(0, c.logPolB.Buf), bb(1, c.logPolA.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
 	})
 	if err != nil {
 		return err
 	}
 	c.pipeCrosspowerTrans, err = mk(c.spirvCrosspower, []compute.BufferBinding{
-		bb(0, c.complexA.Buf), bb(1, c.complexB.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
+		bb(0, c.complexB.Buf), bb(1, c.complexA.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
 	})
 	if err != nil {
 		return err
@@ -499,6 +500,9 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	peakX, peakY := find2DPeak(cpData[:lpN], c.lpW, c.lpH)
 
 	// Handle wraparound: if peak is in second half, subtract N.
+	if peakX > float64(c.lpW)/2 {
+		peakX -= float64(c.lpW)
+	}
 	if peakY > float64(c.lpH)/2 {
 		peakY -= float64(c.lpH)
 	}
