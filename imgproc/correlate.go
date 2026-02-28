@@ -541,6 +541,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	}
 	normalizeComplex(transData[:n], c.w*c.h)
 	tx, ty := find2DPeak(transData[:n], c.w, c.h)
+	fmt.Printf("DEBUG: translation raw peak (%f, %f) w=%d h=%d\n", tx, ty, c.w, c.h)
 
 	// Handle wraparound for translation.
 	if tx > float64(c.w)/2 {
@@ -550,11 +551,23 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 		ty -= float64(c.h)
 	}
 
+	// Cross-correlation gives shift to align B→A; negate to get B's displacement.
+	tx = -tx
+	ty = -ty
+
+	// The detected translation is in the de-rotated/de-scaled frame.
+	// Apply R(-angle)*scale to recover the original SRT translation.
+	rad := angle * math.Pi / 180.0
+	cosA := math.Cos(rad)
+	sinA := math.Sin(rad)
+	origTx := (tx*cosA + ty*sinA) * scale
+	origTy := (-tx*sinA + ty*cosA) * scale
+
 	return &Result{
 		Angle: angle,
 		Scale: scale,
-		Tx:    tx,
-		Ty:    ty,
+		Tx:    origTx,
+		Ty:    origTy,
 	}, nil
 }
 
