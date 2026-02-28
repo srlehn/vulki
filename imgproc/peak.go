@@ -264,6 +264,39 @@ func realToComplex(data []float32) [][2]float32 {
 	return out
 }
 
+// grayPad converts an RGBA image to grayscale float32 and zero-pads to padSize.
+// No DoG, no Hann, no cropping — used for Phase 2 translation per Reddy & Chatterji.
+func grayPad(img *image.RGBA, padSize int) []float32 {
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+
+	out := make([]float32, padSize*padSize)
+	offX := (padSize - w) / 2
+	offY := (padSize - h) / 2
+	if offX < 0 {
+		offX = 0
+	}
+	if offY < 0 {
+		offY = 0
+	}
+
+	for y := 0; y < h && y+offY < padSize; y++ {
+		for x := 0; x < w && x+offX < padSize; x++ {
+			sx := bounds.Min.X + x
+			sy := bounds.Min.Y + y
+			if sx >= bounds.Max.X || sy >= bounds.Max.Y {
+				continue
+			}
+			i := (sy-bounds.Min.Y)*img.Stride + (sx-bounds.Min.X)*4
+			r := float32(img.Pix[i]) / 255.0
+			g := float32(img.Pix[i+1]) / 255.0
+			b := float32(img.Pix[i+2]) / 255.0
+			out[(y+offY)*padSize+(x+offX)] = 0.2989*r + 0.5870*g + 0.1140*b
+		}
+	}
+	return out
+}
+
 // cropDogHannPad takes an RGBA image, crops a centered square of the given size,
 // converts to grayscale, applies DoG bandpass + Hann window, then zero-pads to padSize.
 func cropDogHannPad(img *image.RGBA, cropSize, padSize int) []float32 {
