@@ -58,6 +58,54 @@ func find2DPeak(data [][2]float32, w, h int) (float64, float64) {
 	return peakX, peakY
 }
 
+// find2DPeakWithMag is like find2DPeak but also returns the peak magnitude.
+func find2DPeakWithMag(data [][2]float32, w, h int) (float64, float64, float64) {
+	maxVal := float64(0)
+	maxX, maxY := 0, 0
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := data[y*w+x]
+			mag := math.Sqrt(float64(c[0]*c[0] + c[1]*c[1]))
+			if mag > maxVal {
+				maxVal = mag
+				maxX = x
+				maxY = y
+			}
+		}
+	}
+
+	peakX := float64(maxX)
+	peakY := float64(maxY)
+
+	mag := func(x, y int) float64 {
+		x = ((x % w) + w) % w
+		y = ((y % h) + h) % h
+		c := data[y*w+x]
+		return math.Sqrt(float64(c[0]*c[0] + c[1]*c[1]))
+	}
+
+	if maxX > 0 && maxX < w-1 {
+		l := mag(maxX-1, maxY)
+		c := mag(maxX, maxY)
+		r := mag(maxX+1, maxY)
+		denom := 2*c - l - r
+		if denom > 1e-10 {
+			peakX += (l - r) / (2 * denom)
+		}
+	}
+	if maxY > 0 && maxY < h-1 {
+		u := mag(maxX, maxY-1)
+		c := mag(maxX, maxY)
+		d := mag(maxX, maxY+1)
+		denom := 2*c - u - d
+		if denom > 1e-10 {
+			peakY += (u - d) / (2 * denom)
+		}
+	}
+
+	return peakX, peakY, maxVal
+}
+
 // logPolarToAngleScale converts a peak in log-polar correlation space to angle and scale.
 // Following scikit-image convention: A*conj(B) cross-correlation with 180° angle range.
 func logPolarToAngleScale(peakX, peakY float64, lpW, lpH int, maxRadius float64) (angle, scale float64) {

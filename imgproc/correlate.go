@@ -497,77 +497,93 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 
 	angle, scale := logPolarToAngleScale(peakX, peakY, c.lpW, c.lpH, maxRadius)
 
-	// ---- Phase 2: Translation ----
-	// Rotate+scale imgB to undo the found transform on CPU.
-	warpedB := BilinearWarp(imgB, angle, scale)
-
-	// Preprocess warped B with same square crop + DoG + Hann + pad pipeline.
-	grayBData = cropDogHannPad(warpedB, cropSize, c.w)
-
-	// Upload both as complex for translation FFT.
-	// grayAData is still valid from phase 1.
-	if err := c.complexA.UploadSlice(c.ctx, realToComplex(grayAData)); err != nil {
-		return nil, err
+	// ---- Phase 2: Translation with 180° disambiguation ----
+	// The log-polar magnitude spectrum has 180° symmetry, so the detected
+	// angle may be off by 180°. Following Reddy & Chatterji, we try both
+	// angles and pick the one with the higher cross-power peak.
+	type transResult struct {
+		angle, scale, tx, ty, peak float64
 	}
-	if err := c.complexB.UploadSlice(c.ctx, realToComplex(grayBData)); err != nil {
-		return nil, err
+	tryTranslation := func(tryAngle, tryScale float64) (transResult, error) {
+		warpedB := BilinearWarp(imgB, tryAngle, tryScale)
+		bData := cropDogHannPad(warpedB, cropSize, c.w)
+
+		if err := c.complexA.UploadSlice(c.ctx, realToComplex(grayAData)); err != nil {
+			return transResult{}, err
+		}
+		if err := c.complexB.UploadSlice(c.ctx, realToComplex(bData)); err != nil {
+			return transResult{}, err
+		}
+
+		rec, err := c.ctx.NewCommandRecorder()
+		if err != nil {
+			return transResult{}, err
+		}
+		recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
+		recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
+
+		transParams := encodeU32Params(n, 1)
+		rec.UpdateBuffer(paramsBuf, 0, transParams)
+		rec.BarrierTransferToCompute(paramsBuf)
+		rec.Bind(c.pipeCrosspowerTrans)
+		rec.Dispatch(groups, 1, 1)
+		rec.Barrier(c.crossPow.Buf.DeviceBuffer)
+
+		recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.w, c.h, true)
+
+		if err := rec.Submit(); err != nil {
+			return transResult{}, fmt.Errorf("imgproc: phase2 FFT: %w", err)
+		}
+
+		transData, err := c.crossPow.DownloadSlice(c.ctx)
+		if err != nil {
+			return transResult{}, err
+		}
+		normalizeComplex(transData[:n], c.w*c.h)
+		ptx, pty, peakMag := find2DPeakWithMag(transData[:n], c.w, c.h)
+		fmt.Printf("DEBUG: translation peak (%f, %f) mag=%f angle=%.1f\n", ptx, pty, peakMag, tryAngle)
+
+		if ptx > float64(c.w)/2 {
+			ptx -= float64(c.w)
+		}
+		if pty > float64(c.h)/2 {
+			pty -= float64(c.h)
+		}
+
+		// Negate: cross-correlation gives B→A shift.
+		ptx = -ptx
+		pty = -pty
+
+		// Rotate back to original frame.
+		rad := tryAngle * math.Pi / 180.0
+		cosA := math.Cos(rad)
+		sinA := math.Sin(rad)
+		origTx := (ptx*cosA + pty*sinA) * tryScale
+		origTy := (-ptx*sinA + pty*cosA) * tryScale
+
+		return transResult{tryAngle, tryScale, origTx, origTy, peakMag}, nil
 	}
 
-	// FFT2D, cross-power, IFFT2D for translation.
-	rec, err = c.ctx.NewCommandRecorder()
+	res1, err := tryTranslation(angle, scale)
 	if err != nil {
 		return nil, err
 	}
-	recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
-	recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
-
-	transParams := encodeU32Params(n, 1) // normalize=1 for translation
-	rec.UpdateBuffer(paramsBuf, 0, transParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	rec.Bind(c.pipeCrosspowerTrans)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.crossPow.Buf.DeviceBuffer)
-
-	recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.w, c.h, true)
-
-	if err := rec.Submit(); err != nil {
-		return nil, fmt.Errorf("imgproc: phase2 FFT: %w", err)
-	}
-
-	// Download and find translation peak.
-	transData, err := c.crossPow.DownloadSlice(c.ctx)
+	res2, err := tryTranslation(angle+180, scale)
 	if err != nil {
 		return nil, err
 	}
-	normalizeComplex(transData[:n], c.w*c.h)
-	tx, ty := find2DPeak(transData[:n], c.w, c.h)
-	fmt.Printf("DEBUG: translation raw peak (%f, %f) w=%d h=%d\n", tx, ty, c.w, c.h)
 
-	// Handle wraparound for translation.
-	if tx > float64(c.w)/2 {
-		tx -= float64(c.w)
+	best := res1
+	if res2.peak > res1.peak {
+		best = res2
 	}
-	if ty > float64(c.h)/2 {
-		ty -= float64(c.h)
-	}
-
-	// Cross-correlation gives shift to align B→A; negate to get B's displacement.
-	tx = -tx
-	ty = -ty
-
-	// The detected translation is in the de-rotated/de-scaled frame.
-	// Apply R(-angle)*scale to recover the original SRT translation.
-	rad := angle * math.Pi / 180.0
-	cosA := math.Cos(rad)
-	sinA := math.Sin(rad)
-	origTx := (tx*cosA + ty*sinA) * scale
-	origTy := (-tx*sinA + ty*cosA) * scale
+	fmt.Printf("DEBUG: chose angle=%.2f° (peak1=%f peak2=%f)\n", best.angle, res1.peak, res2.peak)
 
 	return &Result{
-		Angle: angle,
-		Scale: scale,
-		Tx:    origTx,
-		Ty:    origTy,
+		Angle: best.angle,
+		Scale: best.scale,
+		Tx:    best.tx,
+		Ty:    best.ty,
 	}, nil
 }
 
