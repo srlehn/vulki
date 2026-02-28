@@ -66,9 +66,9 @@ func logPolarToAngleScale(peakX, peakY float64, lpW, lpH int, maxRadius float64)
 	return angle, scale
 }
 
-// bilinearWarp rotates and scales an image around its center using bilinear interpolation.
+// BilinearWarp rotates and scales an image around its center using bilinear interpolation.
 // angleDeg is in degrees, scale is a multiplier.
-func bilinearWarp(src *image.RGBA, angleDeg, scale float64) *image.RGBA {
+func BilinearWarp(src *image.RGBA, angleDeg, scale float64) *image.RGBA {
 	bounds := src.Bounds()
 	w := bounds.Dx()
 	h := bounds.Dy()

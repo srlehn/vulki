@@ -511,7 +511,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 
 	// ---- Phase 2: Translation ----
 	// Rotate+scale imgB to undo the found transform on CPU.
-	warpedB := bilinearWarp(imgB, angle, scale)
+	warpedB := BilinearWarp(imgB, angle, scale)
 
 	// Re-upload warped image.
 	pixBWarped := padImageToRGBA(warpedB, c.w, c.h)
