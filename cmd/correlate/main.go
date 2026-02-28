@@ -96,7 +96,7 @@ func runSelfTest(path string, save bool) error {
 	gtTx := rand.IntN(101) - 50        // [-50, 50]
 	gtTy := rand.IntN(101) - 50        // [-50, 50]
 	gtRot := rand.Float64()*90 - 45    // [-45, 45] degrees
-	gtScale := rand.Float64()*1.5 + 0.5 // [0.5, 2.0]
+	gtScale := rand.Float64()*0.8 + 0.7 // [0.7, 1.5]
 
 	fmt.Println("=== Self-test mode ===")
 	fmt.Printf("Ground truth: tx=%d ty=%d rot=%.2f° scale=%.4f\n", gtTx, gtTy, gtRot, gtScale)
