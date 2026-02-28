@@ -347,16 +347,16 @@ func (c *Correlator) createPipelines() error {
 		return err
 	}
 
-	// Crosspower: binding 0=b(read), 1=a(read), 2=out(write), 3=params
-	// We compute B*conj(A) so that IFFT peaks at +shift (not -shift).
+	// Crosspower: binding 0=a(read), 1=b(read), 2=out(write), 3=params
+	// We compute A*conj(B) following scikit-image convention.
 	c.pipeCrosspowerLP, err = mk(c.spirvCrosspower, []compute.BufferBinding{
-		bb(0, c.logPolB.Buf), bb(1, c.logPolA.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
+		bb(0, c.logPolA.Buf), bb(1, c.logPolB.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
 	})
 	if err != nil {
 		return err
 	}
 	c.pipeCrosspowerTrans, err = mk(c.spirvCrosspower, []compute.BufferBinding{
-		bb(0, c.complexB.Buf), bb(1, c.complexA.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
+		bb(0, c.complexA.Buf), bb(1, c.complexB.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
 	})
 	if err != nil {
 		return err
@@ -447,17 +447,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Dispatch(groups, 1, 1)
 	rec.Barrier(c.magB.Buf.DeviceBuffer)
 
-	// Highpass.
-	rec.UpdateBuffer(paramsBuf, 0, whParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	rec.Bind(c.pipeHighpassA)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.magA.Buf.DeviceBuffer)
-	rec.Bind(c.pipeHighpassB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(c.magB.Buf.DeviceBuffer)
-
-	// Log-polar remap.
+	// Log-polar remap. Radius = half-diagonal, matching scikit-image default.
 	maxRadius := math.Sqrt(float64(c.w*c.w+c.h*c.h)) / 2.0
 	logRmax := float32(math.Log(maxRadius))
 	lpParams := encodeLogPolarParams(uint32(c.w), uint32(c.h), uint32(c.lpW), uint32(c.lpH), logRmax)
@@ -476,8 +466,8 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	recordFFT2D(rec, c.logPolA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevLPA, c.pipeButterflyLPA, c.lpW, c.lpH, false)
 	recordFFT2D(rec, c.logPolB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevLPB, c.pipeButterflyLPB, c.lpW, c.lpH, false)
 
-	// Cross-power spectrum.
-	cpParams := encodeU32Params(lpN)
+	// Cross-power spectrum (raw, no phase normalization for log-polar).
+	cpParams := encodeU32Params(lpN, 0) // normalize=0
 	rec.UpdateBuffer(paramsBuf, 0, cpParams)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipeCrosspowerLP)
@@ -557,7 +547,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
 	recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
 
-	transParams := encodeU32Params(n)
+	transParams := encodeU32Params(n, 1) // normalize=1 for translation
 	rec.UpdateBuffer(paramsBuf, 0, transParams)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipeCrosspowerTrans)

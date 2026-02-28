@@ -49,9 +49,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let xi = idx % params.dst_w;
     let yi = idx / params.dst_w;
 
-    // Log-polar mapping.
+    // Log-polar mapping (full 360° range, matching scikit-image convention).
     let log_r = f32(xi) / f32(params.dst_w) * params.log_rmax;
-    let theta = f32(yi) / f32(params.dst_h) * PI;
+    let theta = f32(yi) / f32(params.dst_h) * 2.0 * PI;
     let r = exp(log_r);
 
     // Sample from DC (origin) of magnitude spectrum with wraparound.

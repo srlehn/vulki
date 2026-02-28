@@ -1,7 +1,8 @@
-// Normalized cross-power spectrum: A * conj(B) / (|A * conj(B)| + eps)
+// Cross-power spectrum: A * conj(B), optionally normalized by magnitude.
 
 struct Params {
     count: u32,
+    normalize: u32, // 0 = raw cross-correlation, 1 = phase normalization
 }
 
 @group(0) @binding(0) var<storage, read> a: array<vec2<f32>>;
@@ -23,6 +24,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let re = va.x * vb.x + va.y * vb.y;
     let im = va.y * vb.x - va.x * vb.y;
 
-    let mag = sqrt(re * re + im * im) + 1e-10;
-    out[idx] = vec2<f32>(re / mag, im / mag);
+    if params.normalize != 0u {
+        let mag = sqrt(re * re + im * im) + 1e-10;
+        out[idx] = vec2<f32>(re / mag, im / mag);
+    } else {
+        out[idx] = vec2<f32>(re, im);
+    }
 }

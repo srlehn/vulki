@@ -159,7 +159,7 @@ func runSelfTest(path string, save bool) error {
 	elapsed := time.Since(t0)
 
 	fmt.Println()
-	fmt.Printf("Phase correlation took %v\n", elapsed)
+	fmt.Printf("Phase correlation took %dms\n", elapsed.Milliseconds())
 	fmt.Printf("Ground truth: tx=%d  ty=%d  rot=%.2f°  scale=%.4f\n", gtTx, gtTy, gtRot, gtScale)
 	fmt.Printf("Detected:     tx=%.2f  ty=%.2f  rot=%.2f°  scale=%.4f\n", result.Tx, result.Ty, result.Angle, result.Scale)
 	fmt.Printf("Error:        tx=%.2f  ty=%.2f  rot=%.2f°  scale=%.4f\n",

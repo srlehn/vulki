@@ -59,12 +59,11 @@ func find2DPeak(data [][2]float32, w, h int) (float64, float64) {
 }
 
 // logPolarToAngleScale converts a peak in log-polar correlation space to angle and scale.
-// The cross-power IFFT peaks at the negative of the actual shift in log-polar space,
-// so we negate both: angle = -peakY and scale = exp(-peakX).
+// Following scikit-image convention: A*conj(B) cross-correlation with 360° angle range.
 func logPolarToAngleScale(peakX, peakY float64, lpW, lpH int, maxRadius float64) (angle, scale float64) {
-	angle = -peakY / float64(lpH) * 180.0
+	angle = peakY / float64(lpH) * 360.0
 	logRmax := math.Log(maxRadius)
-	scale = math.Exp(-peakX / float64(lpW) * logRmax)
+	scale = math.Exp(peakX / float64(lpW) * logRmax)
 	return angle, scale
 }
 
@@ -183,21 +182,26 @@ func log2i(n int) int {
 	return r
 }
 
-// padImageToRGBA pads an RGBA image to padW x padH with black pixels.
+// padImageToRGBA pads an RGBA image to padW x padH with black pixels,
+// centering the content so the Hann window is strongest over the image.
 func padImageToRGBA(src *image.RGBA, padW, padH int) []uint32 {
 	bounds := src.Bounds()
 	srcW := bounds.Dx()
 	srcH := bounds.Dy()
 	out := make([]uint32, padW*padH)
 
-	for y := 0; y < srcH && y < padH; y++ {
-		for x := 0; x < srcW && x < padW; x++ {
-			off := (y+bounds.Min.Y)*src.Stride + (x+bounds.Min.X)*4
-			r := uint32(src.Pix[off])
-			g := uint32(src.Pix[off+1])
-			b := uint32(src.Pix[off+2])
-			a := uint32(src.Pix[off+3])
-			out[y*padW+x] = r | (g << 8) | (b << 16) | (a << 24)
+	// Center the image in the padded buffer.
+	offX := (padW - srcW) / 2
+	offY := (padH - srcH) / 2
+
+	for y := 0; y < srcH && y+offY < padH; y++ {
+		for x := 0; x < srcW && x+offX < padW; x++ {
+			srcOff := (y+bounds.Min.Y)*src.Stride + (x+bounds.Min.X)*4
+			r := uint32(src.Pix[srcOff])
+			g := uint32(src.Pix[srcOff+1])
+			b := uint32(src.Pix[srcOff+2])
+			a := uint32(src.Pix[srcOff+3])
+			out[(y+offY)*padW+(x+offX)] = r | (g << 8) | (b << 16) | (a << 24)
 		}
 	}
 	return out

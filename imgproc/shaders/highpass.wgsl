@@ -1,5 +1,6 @@
-// High-pass emphasis filter: (1 - cos(pi*x/W)) * (1 - cos(pi*y/H))
-// Applied in-place to magnitude spectrum.
+// High-pass emphasis filter that only zeroes DC, not entire frequency axes.
+// Uses h(x,y) = 1 - (1-hx)*(1-hy) where hx,hy are scaled Hann components.
+// This zeroes only (0,0) while preserving the u=0 and v=0 axes.
 
 struct Params {
     width: u32,
@@ -20,7 +21,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let x = idx % params.width;
     let y = idx / params.width;
-    let hx = 1.0 - cos(2.0 * PI * f32(x) / f32(params.width));
-    let hy = 1.0 - cos(2.0 * PI * f32(y) / f32(params.height));
-    data[idx] = data[idx] * hx * hy;
+    let hx = 0.5 * (1.0 - cos(2.0 * PI * f32(x) / f32(params.width)));
+    let hy = 0.5 * (1.0 - cos(2.0 * PI * f32(y) / f32(params.height)));
+    // Only zero at DC (0,0), not along entire axes.
+    let h = 1.0 - (1.0 - hx) * (1.0 - hy);
+    data[idx] = data[idx] * h;
 }
