@@ -7,7 +7,6 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"math"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -169,21 +168,34 @@ func runSelfTest(path string, save bool) error {
 		result.Angle-gtRot, result.Scale-gtScale)
 
 	if save {
-		// Reconstruct: apply inverse of detected transform to imgB.
-		// Work in a larger canvas so rotated/shifted content isn't lost.
-		pad := int(math.Ceil(math.Sqrt(float64(w*w + h*h))))
-		bigW := w + 2*pad
-		bigH := h + 2*pad
+		// Reconstruct: apply detected params via SRT (same as ground truth image).
+		tmpDet, err := os.CreateTemp("", "correlate-detected-*.png")
+		if err != nil {
+			return fmt.Errorf("create temp file: %w", err)
+		}
+		tmpDetPath := tmpDet.Name()
+		tmpDet.Close()
+		defer os.Remove(tmpDetPath)
 
-		bigB := image.NewRGBA(image.Rect(0, 0, bigW, bigH))
-		draw.Draw(bigB, image.Rect(pad, pad, pad+imgB.Bounds().Dx(), pad+imgB.Bounds().Dy()), imgB, imgB.Bounds().Min, draw.Src)
-
-		reconstructed := imgproc.BilinearWarp(bigB, -result.Angle, 1.0/result.Scale)
-
-		cropped := image.NewRGBA(image.Rect(0, 0, w, h))
-		srcOffX := pad - int(math.Round(result.Tx))
-		srcOffY := pad - int(math.Round(result.Ty))
-		draw.Draw(cropped, cropped.Bounds(), reconstructed, image.Pt(srcOffX, srcOffY), draw.Src)
+		detSrt := fmt.Sprintf("%d,%d %s,%s %s %s,%s",
+			cx, cy,
+			fmtf(result.Scale), fmtf(result.Scale),
+			fmtf(-result.Angle),
+			fmtf(float64(cx)+result.Tx), fmtf(float64(cy)+result.Ty),
+		)
+		detCmd := exec.Command("convert", path,
+			"-virtual-pixel", "edge",
+			"-distort", "SRT", detSrt,
+			"+repage", tmpDetPath,
+		)
+		detCmd.Stderr = os.Stderr
+		if err := detCmd.Run(); err != nil {
+			return fmt.Errorf("ImageMagick reconstruct: %w", err)
+		}
+		cropped, err := loadRGBA(tmpDetPath)
+		if err != nil {
+			return fmt.Errorf("load reconstructed: %w", err)
+		}
 
 		savePath := fmt.Sprintf("selftest_gt_tx%d_ty%d_rot_%sdeg_scale_%s_det_tx%s_ty%s_rot_%sdeg_scale_%s.png",
 			gtTx, gtTy, fmtf(gtRot), fmtf(gtScale),
