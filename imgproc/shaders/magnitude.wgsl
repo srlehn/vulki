@@ -1,4 +1,6 @@
-// Compute magnitude |z| from complex array.
+// Compute log-magnitude log(1 + |z|) from complex array.
+// Per Reddy & Chatterji (1996) §III.A: "Fourier log-magnitude spectra
+// is used instead of Fourier magnitude spectra for the log-polar conversion."
 
 struct Params {
     count: u32,
@@ -15,5 +17,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let c = input[idx];
-    output[idx] = sqrt(c.x * c.x + c.y * c.y);
+    let mag = sqrt(c.x * c.x + c.y * c.y);
+    output[idx] = log(1.0 + mag);
 }

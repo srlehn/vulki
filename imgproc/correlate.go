@@ -398,12 +398,14 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	groups := (n + wgSize - 1) / wgSize
 	paramsBuf := c.params.DeviceBuffer
 
-	// Crop images to centered squares, apply DoG+Hann, pad to power-of-2.
-	grayAData := cropDogHannPad(imgA, cropSize, c.w)
-	grayBData := cropDogHannPad(imgB, cropSize, c.w)
-
 	// ---- Phase 1: Rotation & Scale ----
-	// Upload preprocessed grayscale as complex for FFT.
+	// Per Reddy & Chatterji: plain grayscale, zero-padded to power-of-2.
+	// No spatial preprocessing (DoG/Hann) — the paper relies on highpass
+	// filtering of the magnitude spectrum + log-magnitude instead.
+	grayAData := grayPad(imgA, c.w)
+	grayBData := grayPad(imgB, c.w)
+
+	// Upload grayscale as complex for FFT.
 	if err := c.complexA.UploadSlice(c.ctx, realToComplex(grayAData)); err != nil {
 		return nil, err
 	}
@@ -443,8 +445,18 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Dispatch(shiftGroups, 1, 1)
 	rec.Barrier(c.magB.Buf.DeviceBuffer)
 
-	// Log-polar remap. Limited radius following scikit-image (shape[0]//8).
-	maxRadius := float64(cropSize) / 8.0
+	// Highpass emphasis filter per paper §III.B eq. 23-24.
+	// Reuse shiftParams (same width/height layout).
+	rec.Bind(c.pipeHighpassA)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.magA.Buf.DeviceBuffer)
+	rec.Bind(c.pipeHighpassB)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.magB.Buf.DeviceBuffer)
+
+	// Log-polar remap. Radius = cropSize * 1.1 / 2 following imreg_dft
+	// (paper uses full spectrum coverage with log base 1.044).
+	maxRadius := float64(cropSize) * 1.1 / 2.0
 	logRmax := float32(math.Log(maxRadius))
 	lpParams := encodeLogPolarParams(uint32(c.w), uint32(c.h), uint32(c.lpW), uint32(c.lpH), logRmax)
 	rec.UpdateBuffer(paramsBuf, 0, lpParams)
@@ -462,8 +474,8 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	recordFFT2D(rec, c.logPolA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevLPA, c.pipeButterflyLPA, c.lpW, c.lpH, false)
 	recordFFT2D(rec, c.logPolB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevLPB, c.pipeButterflyLPB, c.lpW, c.lpH, false)
 
-	// Cross-power spectrum (raw, no phase normalization for log-polar).
-	cpParams := encodeU32Params(lpN, 0) // normalize=0
+	// Cross-power spectrum with phase normalization per paper eq. (3).
+	cpParams := encodeU32Params(lpN, 1) // normalize=1
 	rec.UpdateBuffer(paramsBuf, 0, cpParams)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipeCrosspowerLP)

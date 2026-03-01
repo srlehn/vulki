@@ -1,6 +1,12 @@
-// High-pass emphasis filter that only zeroes DC, not entire frequency axes.
-// Uses h(x,y) = 1 - (1-hx)*(1-hy) where hx,hy are scaled Hann components.
-// This zeroes only (0,0) while preserving the u=0 and v=0 axes.
+// Highpass emphasis filter per Reddy & Chatterji (1996) eq. 23-24.
+// Applied to fftshifted magnitude spectrum (DC at center).
+//
+// Paper formula (centered coordinates -0.5 ≤ ξ,η ≤ 0.5):
+//   X(ξ,η) = cos(πξ) * cos(πη)
+//   H(ξ,η) = (1.0 - X) * (2.0 - X)
+//
+// In pixel coordinates with DC at (w/2, h/2):
+//   ξ = (x - w/2) / w,  η = (y - h/2) / h
 
 struct Params {
     width: u32,
@@ -21,9 +27,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let x = idx % params.width;
     let y = idx / params.width;
-    let hx = 0.5 * (1.0 - cos(2.0 * PI * f32(x) / f32(params.width)));
-    let hy = 0.5 * (1.0 - cos(2.0 * PI * f32(y) / f32(params.height)));
-    // Only zero at DC (0,0), not along entire axes.
-    let h = 1.0 - (1.0 - hx) * (1.0 - hy);
-    data[idx] = data[idx] * h;
+
+    // Centered normalized coordinates: ξ ∈ [-0.5, 0.5], η ∈ [-0.5, 0.5]
+    let xi = f32(x) / f32(params.width) - 0.5;
+    let eta = f32(y) / f32(params.height) - 0.5;
+
+    let X = cos(PI * xi) * cos(PI * eta);
+    let H = (1.0 - X) * (2.0 - X);
+
+    data[idx] = data[idx] * H;
 }
