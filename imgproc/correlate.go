@@ -516,13 +516,15 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	type transResult struct {
 		angle, scale, tx, ty, peak float64
 	}
-	// Phase 2 per Reddy & Chatterji: transform imgA by (-angle, scale) so
-	// it matches imgB's rotation+scale, then phase correlate with imgB.
-	// The peak directly gives the translation. No DoG/Hann/crop — raw grayscale.
+	// Phase 2 per Reddy & Chatterji: "the image with the highest resolution
+	// is scaled and rotated by amounts a and θ₀, respectively, and the amount
+	// of translational movement is found out using phase correlation technique."
+	//
+	// BilinearWarp(imgA, -angle, scale) transforms imgA to match imgB's
+	// rotation+scale frame. Phase correlation with imgB then gives translation
+	// directly. The paper uses bilinear interpolation (§III.D) for this step.
 	rawB := grayPad(imgB, c.w)
 	tryTranslation := func(tryAngle, tryScale float64) (transResult, error) {
-		// BilinearWarp(imgA, -angle, scale) produces transformedA such that
-		// imgB(p) = transformedA(p - t), so phase correlation gives t directly.
 		transformedA := BilinearWarp(imgA, -tryAngle, tryScale)
 		rawTransA := grayPad(transformedA, c.w)
 
@@ -540,8 +542,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 		recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
 		recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
 
-		// Phase-normalized cross-power spectrum (paper: "IFFT of the
-		// cross-power spectrum phase").
+		// Phase-normalized cross-power spectrum (paper eq. 3).
 		transParams := encodeU32Params(n, 1)
 		rec.UpdateBuffer(paramsBuf, 0, transParams)
 		rec.BarrierTransferToCompute(paramsBuf)
