@@ -461,6 +461,36 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Dispatch(groups, 1, 1)
 	rec.Barrier(c.complexB.Buf.DeviceBuffer)
 
+	// DEBUG: Submit and verify grayscale_pad output.
+	if err := rec.Submit(); err != nil {
+		return nil, fmt.Errorf("imgproc: grayscale_pad submit: %w", err)
+	}
+	{
+		dbg, err := c.complexA.DownloadSlice(c.ctx)
+		if err != nil {
+			return nil, fmt.Errorf("imgproc: debug download: %w", err)
+		}
+		// Check center pixel and some stats.
+		center := c.w/2*c.w + c.w/2
+		nonzero := 0
+		maxVal := float32(0)
+		for _, v := range dbg {
+			if v[0] != 0 {
+				nonzero++
+			}
+			if v[0] > maxVal {
+				maxVal = v[0]
+			}
+		}
+		fmt.Printf("DEBUG grayscale_pad: center=(%f,%f) nonzero=%d/%d max=%f\n",
+			dbg[center][0], dbg[center][1], nonzero, len(dbg), maxVal)
+	}
+
+	rec, err = c.ctx.NewCommandRecorder()
+	if err != nil {
+		return nil, err
+	}
+
 	// FFT2D on complexA and complexB.
 	recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
 	recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
@@ -526,6 +556,41 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 
 	// IFFT2D on cross-power result.
 	recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.lpW, c.lpH, true)
+
+	// DEBUG: Download IFFT result and find peak on CPU.
+	if err := rec.Submit(); err != nil {
+		return nil, fmt.Errorf("imgproc: phase1 IFFT: %w", err)
+	}
+	{
+		cpData, err := c.crossPow.DownloadSlice(c.ctx)
+		if err != nil {
+			return nil, err
+		}
+		// CPU peak finding (inline).
+		maxVal := float64(0)
+		maxX, maxY := 0, 0
+		for y := 0; y < c.lpH; y++ {
+			for x := 0; x < c.lpW; x++ {
+				cv := cpData[y*c.lpW+x]
+				mag := math.Sqrt(float64(cv[0]*cv[0] + cv[1]*cv[1]))
+				if mag > maxVal {
+					maxVal = mag
+					maxX = x
+					maxY = y
+				}
+			}
+		}
+		fmt.Printf("DEBUG CPU peak: (%d, %d) mag=%f (lpW=%d lpH=%d)\n", maxX, maxY, maxVal, c.lpW, c.lpH)
+		// Also check DC for comparison.
+		dc := cpData[0]
+		dcMag := math.Sqrt(float64(dc[0]*dc[0] + dc[1]*dc[1]))
+		fmt.Printf("DEBUG CPU DC mag=%f, ratio peak/DC=%f\n", dcMag, maxVal/dcMag)
+	}
+
+	rec, err = c.ctx.NewCommandRecorder()
+	if err != nil {
+		return nil, err
+	}
 
 	// Peak find (logpolar mode) → result[0..7]
 	peakLPParams := encodePeakFindParams(uint32(c.lpW), uint32(c.lpH), 0, 0, logRmax)
