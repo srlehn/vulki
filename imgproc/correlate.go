@@ -2,20 +2,25 @@ package imgproc
 
 import (
 	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"math"
+	"unsafe"
 
 	"vkpg/compute"
 	"vkpg/shader"
 	"vkpg/vk"
 )
 
-//go:embed shaders/grayscale.wgsl
-var grayscaleWGSL string
+//go:embed shaders/grayscale_pad.wgsl
+var grayscalePadWGSL string
 
-//go:embed shaders/hann.wgsl
-var hannWGSL string
+//go:embed shaders/bilinear_warp_gray.wgsl
+var bilinearWarpGrayWGSL string
+
+//go:embed shaders/peak_find.wgsl
+var peakFindWGSL string
 
 //go:embed shaders/fft_bitrev.wgsl
 var fftBitrevWGSL string
@@ -54,51 +59,53 @@ type Correlator struct {
 	w, h int
 	// Log-polar dimensions.
 	lpW, lpH int
+	// Max image dimensions (for RGBA buffer sizing).
+	maxW, maxH int
 
-	// Compiled SPIR-V (one per shader type).
-	spirvGrayscale  []byte
-	spirvHann       []byte
-	spirvBitrev     []byte
-	spirvButterfly  []byte
-	spirvMagnitude  []byte
-	spirvHighpass   []byte
-	spirvLogpolar   []byte
-	spirvFftshift   []byte
-	spirvCrosspower []byte
+	// Compiled SPIR-V.
+	spirvGrayPad      []byte
+	spirvWarpGray     []byte
+	spirvPeakFind     []byte
+	spirvBitrev       []byte
+	spirvButterfly    []byte
+	spirvMagnitude    []byte
+	spirvHighpass     []byte
+	spirvLogpolar     []byte
+	spirvFftshift     []byte
+	spirvCrosspower   []byte
 
 	// Working buffers.
-	rgbaA, rgbaB         *compute.TypedBuffer[uint32]
-	grayA, grayB         *compute.TypedBuffer[float32]
-	complexA, complexB   *compute.TypedBuffer[[2]float32]
-	magA, magB           *compute.TypedBuffer[float32]
-	logPolA, logPolB     *compute.TypedBuffer[[2]float32]
-	crossPow             *compute.TypedBuffer[[2]float32]
-	params               *compute.Buffer // shared small params buffer
+	rgbaA, rgbaB       *compute.TypedBuffer[uint32]   // raw RGBA (full image)
+	complexA, complexB *compute.TypedBuffer[[2]float32] // padSize x padSize
+	magA, magB         *compute.TypedBuffer[float32]    // padSize x padSize
+	logPolA, logPolB   *compute.TypedBuffer[[2]float32] // lpW x lpH
+	crossPow           *compute.TypedBuffer[[2]float32] // max(n, lpN)
+	result             *compute.TypedBuffer[float32]    // 16 floats = 64 bytes
+	params             *compute.Buffer                  // shared params
 
-	// Pipelines (one per unique buffer binding configuration).
-	pipeGrayscaleA, pipeGrayscaleB   *compute.Pipeline
-	pipeHannA, pipeHannB             *compute.Pipeline
-	pipeBitrevA, pipeBitrevB         *compute.Pipeline
-	pipeButterflyA, pipeButterflyB   *compute.Pipeline
-	pipeMagA, pipeMagB               *compute.Pipeline
-	pipeFftshiftA, pipeFftshiftB     *compute.Pipeline
-	pipeHighpassA, pipeHighpassB     *compute.Pipeline
-	pipeLogPolA, pipeLogPolB         *compute.Pipeline
-	pipeBitrevLPA, pipeBitrevLPB     *compute.Pipeline
+	// Pipelines.
+	pipeGrayPadA, pipeGrayPadB     *compute.Pipeline
+	pipeWarpA                      *compute.Pipeline
+	pipeBitrevA, pipeBitrevB       *compute.Pipeline
+	pipeButterflyA, pipeButterflyB *compute.Pipeline
+	pipeMagA, pipeMagB             *compute.Pipeline
+	pipeFftshiftA, pipeFftshiftB   *compute.Pipeline
+	pipeHighpassA, pipeHighpassB   *compute.Pipeline
+	pipeLogPolA, pipeLogPolB       *compute.Pipeline
+	pipeBitrevLPA, pipeBitrevLPB   *compute.Pipeline
 	pipeButterflyLPA, pipeButterflyLPB *compute.Pipeline
-	pipeBitrevCP, pipeButterflyCP    *compute.Pipeline
-	pipeCrosspowerLP                 *compute.Pipeline
-	pipeCrosspowerTrans              *compute.Pipeline
+	pipeBitrevCP, pipeButterflyCP  *compute.Pipeline
+	pipeCrosspowerLP               *compute.Pipeline
+	pipeCrosspowerTrans            *compute.Pipeline
+	pipePeakFind                   *compute.Pipeline
 
 	allPipelines []*compute.Pipeline
 }
 
 // NewCorrelator creates a Correlator for images up to maxW x maxH pixels.
 func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
-	c := &Correlator{ctx: ctx}
+	c := &Correlator{ctx: ctx, maxW: maxW, maxH: maxH}
 
-	// Square crop + minimal padding: crop to min(w,h) then pad to next power of 2.
-	// This preserves spectral symmetry and avoids excessive zero-padding.
 	padSize := nextPow2(min(maxW, maxH))
 	c.w = padSize
 	c.h = padSize
@@ -115,8 +122,9 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		src  string
 		name string
 	}{
-		{&c.spirvGrayscale, grayscaleWGSL, "grayscale"},
-		{&c.spirvHann, hannWGSL, "hann"},
+		{&c.spirvGrayPad, grayscalePadWGSL, "grayscale_pad"},
+		{&c.spirvWarpGray, bilinearWarpGrayWGSL, "bilinear_warp_gray"},
+		{&c.spirvPeakFind, peakFindWGSL, "peak_find"},
 		{&c.spirvBitrev, fftBitrevWGSL, "fft_bitrev"},
 		{&c.spirvButterfly, fftButterflyWGSL, "fft_butterfly"},
 		{&c.spirvMagnitude, magnitudeWGSL, "magnitude"},
@@ -133,26 +141,19 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 
 	usage := uint32(vk.BufferUsageStorageBufferBit)
 
-	// Allocate working buffers.
-	c.rgbaA, err = compute.NewTypedBuffer[uint32](ctx, n, usage)
+	// RGBA buffers: hold full raw image pixels.
+	rgbaSize := maxW * maxH
+	c.rgbaA, err = compute.NewTypedBuffer[uint32](ctx, rgbaSize, usage)
 	if err != nil {
 		return nil, fmt.Errorf("imgproc: alloc rgbaA: %w", err)
 	}
-	c.rgbaB, err = compute.NewTypedBuffer[uint32](ctx, n, usage)
+	c.rgbaB, err = compute.NewTypedBuffer[uint32](ctx, rgbaSize, usage)
 	if err != nil {
 		c.Close()
 		return nil, fmt.Errorf("imgproc: alloc rgbaB: %w", err)
 	}
-	c.grayA, err = compute.NewTypedBuffer[float32](ctx, n, usage)
-	if err != nil {
-		c.Close()
-		return nil, err
-	}
-	c.grayB, err = compute.NewTypedBuffer[float32](ctx, n, usage)
-	if err != nil {
-		c.Close()
-		return nil, err
-	}
+
+	// Complex working buffers: padSize x padSize.
 	c.complexA, err = compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {
 		c.Close()
@@ -163,6 +164,8 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		c.Close()
 		return nil, err
 	}
+
+	// Magnitude buffers.
 	c.magA, err = compute.NewTypedBuffer[float32](ctx, n, usage)
 	if err != nil {
 		c.Close()
@@ -173,6 +176,8 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		c.Close()
 		return nil, err
 	}
+
+	// Log-polar buffers.
 	c.logPolA, err = compute.NewTypedBuffer[[2]float32](ctx, lpN, usage)
 	if err != nil {
 		c.Close()
@@ -183,20 +188,28 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		c.Close()
 		return nil, err
 	}
+
+	// Cross-power buffer.
 	c.crossPow, err = compute.NewTypedBuffer[[2]float32](ctx, max(n, lpN), usage)
 	if err != nil {
 		c.Close()
 		return nil, err
 	}
 
-	// Params buffer: 24 bytes is enough for all shader params.
+	// Result buffer: 16 x float32 = 64 bytes.
+	c.result, err = compute.NewTypedBuffer[float32](ctx, 16, usage)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+
+	// Params buffer: 32 bytes covers all shader param structs.
 	c.params, err = ctx.CreateBuffer(32, vk.BufferUsageStorageBufferBit|vk.BufferUsageTransferDstBit)
 	if err != nil {
 		c.Close()
 		return nil, err
 	}
 
-	// Create pipelines.
 	if err := c.createPipelines(); err != nil {
 		c.Close()
 		return nil, err
@@ -221,29 +234,23 @@ func (c *Correlator) createPipelines() error {
 
 	paramBuf := c.params
 
-	// Grayscale: binding 0=rgba, 1=gray, 2=params
-	c.pipeGrayscaleA, err = mk(c.spirvGrayscale, []compute.BufferBinding{
-		bb(0, c.rgbaA.Buf), bb(1, c.grayA.Buf), bb(2, paramBuf),
+	// GrayscalePad: binding 0=rgba, 1=complex, 2=params
+	c.pipeGrayPadA, err = mk(c.spirvGrayPad, []compute.BufferBinding{
+		bb(0, c.rgbaA.Buf), bb(1, c.complexA.Buf), bb(2, paramBuf),
 	})
 	if err != nil {
 		return err
 	}
-	c.pipeGrayscaleB, err = mk(c.spirvGrayscale, []compute.BufferBinding{
-		bb(0, c.rgbaB.Buf), bb(1, c.grayB.Buf), bb(2, paramBuf),
+	c.pipeGrayPadB, err = mk(c.spirvGrayPad, []compute.BufferBinding{
+		bb(0, c.rgbaB.Buf), bb(1, c.complexB.Buf), bb(2, paramBuf),
 	})
 	if err != nil {
 		return err
 	}
 
-	// Hann: binding 0=gray(rw), 1=params
-	c.pipeHannA, err = mk(c.spirvHann, []compute.BufferBinding{
-		bb(0, c.grayA.Buf), bb(1, paramBuf),
-	})
-	if err != nil {
-		return err
-	}
-	c.pipeHannB, err = mk(c.spirvHann, []compute.BufferBinding{
-		bb(0, c.grayB.Buf), bb(1, paramBuf),
+	// BilinearWarpGray: binding 0=rgba, 1=complex, 2=params, 3=result
+	c.pipeWarpA, err = mk(c.spirvWarpGray, []compute.BufferBinding{
+		bb(0, c.rgbaA.Buf), bb(1, c.complexA.Buf), bb(2, paramBuf), bb(3, c.result.Buf),
 	})
 	if err != nil {
 		return err
@@ -370,7 +377,6 @@ func (c *Correlator) createPipelines() error {
 	}
 
 	// Crosspower: binding 0=a(read), 1=b(read), 2=out(write), 3=params
-	// We compute A*conj(B) following scikit-image convention.
 	c.pipeCrosspowerLP, err = mk(c.spirvCrosspower, []compute.BufferBinding{
 		bb(0, c.logPolA.Buf), bb(1, c.logPolB.Buf), bb(2, c.crossPow.Buf), bb(3, paramBuf),
 	})
@@ -384,12 +390,27 @@ func (c *Correlator) createPipelines() error {
 		return err
 	}
 
+	// PeakFind: binding 0=input(complex), 1=result(f32), 2=params
+	c.pipePeakFind, err = mk(c.spirvPeakFind, []compute.BufferBinding{
+		bb(0, c.crossPow.Buf), bb(1, c.result.Buf), bb(2, paramBuf),
+	})
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
+// uploadRGBA uploads raw RGBA pixel data to the GPU buffer.
+func uploadRGBA(ctx *compute.Context, buf *compute.TypedBuffer[uint32], img *image.RGBA) error {
+	pix := img.Pix
+	// Upload raw bytes (reinterpreted as packed RGBA u32 on GPU).
+	return buf.Buf.Upload(ctx, pix)
+}
+
 // PhaseCorrelate recovers rotation, scale, and translation between two images.
+// Uploads raw RGBA once, runs entire pipeline on GPU, downloads only 64 bytes of results.
 func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
-	// Determine square crop size from the smaller dimension of each image.
 	cropSize := min(imgA.Bounds().Dx(), imgA.Bounds().Dy(),
 		imgB.Bounds().Dx(), imgB.Bounds().Dy())
 
@@ -398,26 +419,49 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	groups := (n + wgSize - 1) / wgSize
 	paramsBuf := c.params.DeviceBuffer
 
-	// ---- Phase 1: Rotation & Scale ----
-	// Per Reddy & Chatterji: plain grayscale, zero-padded to power-of-2.
-	// No spatial preprocessing (DoG/Hann) — the paper relies on highpass
-	// filtering of the magnitude spectrum + log-magnitude instead.
-	grayAData := grayPad(imgA, c.w)
-	grayBData := grayPad(imgB, c.w)
+	// Image dimensions for params.
+	srcWA := uint32(imgA.Bounds().Dx())
+	srcHA := uint32(imgA.Bounds().Dy())
+	srcStrideA := uint32(imgA.Stride / 4)
+	srcWB := uint32(imgB.Bounds().Dx())
+	srcHB := uint32(imgB.Bounds().Dy())
+	srcStrideB := uint32(imgB.Stride / 4)
+	padSize := uint32(c.w)
+	cropU32 := uint32(cropSize)
 
-	// Upload grayscale as complex for FFT.
-	if err := c.complexA.UploadSlice(c.ctx, realToComplex(grayAData)); err != nil {
-		return nil, err
+	// ---- Upload raw RGBA pixels (once) ----
+	if err := uploadRGBA(c.ctx, c.rgbaA, imgA); err != nil {
+		return nil, fmt.Errorf("imgproc: upload imgA: %w", err)
 	}
-	if err := c.complexB.UploadSlice(c.ctx, realToComplex(grayBData)); err != nil {
-		return nil, err
+	if err := uploadRGBA(c.ctx, c.rgbaB, imgB); err != nil {
+		return nil, fmt.Errorf("imgproc: upload imgB: %w", err)
 	}
 
-	// FFT2D on complexA and complexB.
+	// ---- Single command buffer for entire pipeline ----
 	rec, err := c.ctx.NewCommandRecorder()
 	if err != nil {
 		return nil, err
 	}
+
+	// ==== Phase 1: Rotation & Scale ====
+
+	// GrayscalePad A: RGBA → complex (crop + pad)
+	gpParamsA := encodeGrayPadParams(srcWA, srcHA, srcStrideA, padSize, cropU32)
+	rec.UpdateBuffer(paramsBuf, 0, gpParamsA)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipeGrayPadA)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.complexA.Buf.DeviceBuffer)
+
+	// GrayscalePad B: RGBA → complex (crop + pad)
+	gpParamsB := encodeGrayPadParams(srcWB, srcHB, srcStrideB, padSize, cropU32)
+	rec.UpdateBuffer(paramsBuf, 0, gpParamsB)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipeGrayPadB)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.complexB.Buf.DeviceBuffer)
+
+	// FFT2D on complexA and complexB.
 	recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
 	recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
 
@@ -432,7 +476,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Dispatch(groups, 1, 1)
 	rec.Barrier(c.magB.Buf.DeviceBuffer)
 
-	// Fftshift magnitude spectra so DC is at center.
+	// Fftshift magnitude spectra.
 	shiftParams := encodeU32Params(uint32(c.w), uint32(c.h))
 	rec.UpdateBuffer(paramsBuf, 0, shiftParams)
 	rec.BarrierTransferToCompute(paramsBuf)
@@ -445,8 +489,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Dispatch(shiftGroups, 1, 1)
 	rec.Barrier(c.magB.Buf.DeviceBuffer)
 
-	// Highpass emphasis filter per paper §III.B eq. 23-24.
-	// Reuse shiftParams (same width/height layout).
+	// Highpass.
 	rec.Bind(c.pipeHighpassA)
 	rec.Dispatch(groups, 1, 1)
 	rec.Barrier(c.magA.Buf.DeviceBuffer)
@@ -454,8 +497,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Dispatch(groups, 1, 1)
 	rec.Barrier(c.magB.Buf.DeviceBuffer)
 
-	// Log-polar remap. Radius = cropSize * 1.1 / 2 following imreg_dft
-	// (paper uses full spectrum coverage with log base 1.044).
+	// Log-polar remap.
 	maxRadius := float64(cropSize) * 1.1 / 2.0
 	logRmax := float32(math.Log(maxRadius))
 	lpParams := encodeLogPolarParams(uint32(c.w), uint32(c.h), uint32(c.lpW), uint32(c.lpH), logRmax)
@@ -474,7 +516,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	recordFFT2D(rec, c.logPolA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevLPA, c.pipeButterflyLPA, c.lpW, c.lpH, false)
 	recordFFT2D(rec, c.logPolB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevLPB, c.pipeButterflyLPB, c.lpW, c.lpH, false)
 
-	// Cross-power spectrum with phase normalization per paper eq. (3).
+	// Cross-power spectrum (phase-normalized).
 	cpParams := encodeU32Params(lpN, 1) // normalize=1
 	rec.UpdateBuffer(paramsBuf, 0, cpParams)
 	rec.BarrierTransferToCompute(paramsBuf)
@@ -485,118 +527,129 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	// IFFT2D on cross-power result.
 	recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.lpW, c.lpH, true)
 
+	// Peak find (logpolar mode) → result[0..7]
+	peakLPParams := encodePeakFindParams(uint32(c.lpW), uint32(c.lpH), 0, 0, logRmax)
+	rec.UpdateBuffer(paramsBuf, 0, peakLPParams)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipePeakFind)
+	rec.Dispatch(1, 1, 1) // single workgroup
+	rec.Barrier(c.result.Buf.DeviceBuffer)
+
+	// ==== Phase 2 Try 1: Translation (angle) ====
+
+	// GrayscalePad B → complexB (fresh)
+	rec.UpdateBuffer(paramsBuf, 0, gpParamsB)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipeGrayPadB)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.complexB.Buf.DeviceBuffer)
+
+	// BilinearWarpGray A (slot=0) → complexA
+	warpParams0 := encodeWarpParams(srcWA, srcHA, srcStrideA, padSize, cropU32, 0)
+	rec.UpdateBuffer(paramsBuf, 0, warpParams0)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipeWarpA)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.complexA.Buf.DeviceBuffer)
+
+	// FFT2D, crosspower, IFFT2D
+	recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
+	recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
+	transParams := encodeU32Params(n, 1) // normalize=1
+	rec.UpdateBuffer(paramsBuf, 0, transParams)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipeCrosspowerTrans)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.crossPow.Buf.DeviceBuffer)
+	recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.w, c.h, true)
+
+	// Peak find (translation mode, offset=8) → result[8..10]
+	peakT1Params := encodePeakFindParams(uint32(c.w), uint32(c.h), 1, 8, 0)
+	rec.UpdateBuffer(paramsBuf, 0, peakT1Params)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipePeakFind)
+	rec.Dispatch(1, 1, 1)
+	rec.Barrier(c.result.Buf.DeviceBuffer)
+
+	// ==== Phase 2 Try 2: Translation (angle + 180°) ====
+
+	// GrayscalePad B → complexB (fresh again)
+	rec.UpdateBuffer(paramsBuf, 0, gpParamsB)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipeGrayPadB)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.complexB.Buf.DeviceBuffer)
+
+	// BilinearWarpGray A (slot=1, 180° variant) → complexA
+	warpParams1 := encodeWarpParams(srcWA, srcHA, srcStrideA, padSize, cropU32, 1)
+	rec.UpdateBuffer(paramsBuf, 0, warpParams1)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipeWarpA)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.complexA.Buf.DeviceBuffer)
+
+	// FFT2D, crosspower, IFFT2D
+	recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
+	recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
+	rec.UpdateBuffer(paramsBuf, 0, transParams)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipeCrosspowerTrans)
+	rec.Dispatch(groups, 1, 1)
+	rec.Barrier(c.crossPow.Buf.DeviceBuffer)
+	recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.w, c.h, true)
+
+	// Peak find (translation mode, offset=12) → result[12..14]
+	peakT2Params := encodePeakFindParams(uint32(c.w), uint32(c.h), 1, 12, 0)
+	rec.UpdateBuffer(paramsBuf, 0, peakT2Params)
+	rec.BarrierTransferToCompute(paramsBuf)
+	rec.Bind(c.pipePeakFind)
+	rec.Dispatch(1, 1, 1)
+	rec.Barrier(c.result.Buf.DeviceBuffer)
+
+	// ==== Submit everything ====
 	if err := rec.Submit(); err != nil {
-		return nil, fmt.Errorf("imgproc: phase1 FFT: %w", err)
+		return nil, fmt.Errorf("imgproc: GPU pipeline: %w", err)
 	}
 
-	// Download and find peak.
-	cpData, err := c.crossPow.DownloadSlice(c.ctx)
+	// ---- Download 64 bytes of results ----
+	res, err := c.result.DownloadSlice(c.ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("imgproc: download results: %w", err)
 	}
-	normalizeComplex(cpData[:lpN], c.lpW*c.lpH)
-	peakX, peakY := find2DPeak(cpData[:lpN], c.lpW, c.lpH)
+
+	// Parse results.
+	rawPeakX := float64(res[0])
+	rawPeakY := float64(res[1])
+	angleDeg := float64(res[2])
+	scale := float64(res[3])
+	tx1 := float64(res[8])
+	ty1 := float64(res[9])
+	mag1 := float64(res[10])
+	tx2 := float64(res[12])
+	ty2 := float64(res[13])
+	mag2 := float64(res[14])
+
 	fmt.Printf("DEBUG: raw peak (%f, %f) lpW=%d lpH=%d maxR=%.2f cropSize=%d\n",
-		peakX, peakY, c.lpW, c.lpH, maxRadius, cropSize)
+		rawPeakX, rawPeakY, c.lpW, c.lpH, maxRadius, cropSize)
+	fmt.Printf("DEBUG: angle=%.2f° scale=%.4f\n", angleDeg, scale)
+	fmt.Printf("DEBUG: translation try1 (%.2f, %.2f) mag=%f\n", tx1, ty1, mag1)
+	fmt.Printf("DEBUG: translation try2 (%.2f, %.2f) mag=%f\n", tx2, ty2, mag2)
 
-	// Handle wraparound: if peak is in second half, subtract N.
-	if peakX > float64(c.lpW)/2 {
-		peakX -= float64(c.lpW)
-	}
-	if peakY > float64(c.lpH)/2 {
-		peakY -= float64(c.lpH)
-	}
-
-	angle, scale := logPolarToAngleScale(peakX, peakY, c.lpW, c.lpH, maxRadius)
-
-	// ---- Phase 2: Translation with 180° disambiguation ----
-	// The log-polar magnitude spectrum has 180° symmetry, so the detected
-	// angle may be off by 180°. Following Reddy & Chatterji, we try both
-	// angles and pick the one with the higher cross-power peak.
-	type transResult struct {
-		angle, scale, tx, ty, peak float64
-	}
-	// Phase 2 per Reddy & Chatterji: "the image with the highest resolution
-	// is scaled and rotated by amounts a and θ₀, respectively, and the amount
-	// of translational movement is found out using phase correlation technique."
-	//
-	// BilinearWarp(imgA, -angle, scale) transforms imgA to match imgB's
-	// rotation+scale frame. Phase correlation with imgB then gives translation
-	// directly. The paper uses bilinear interpolation (§III.D) for this step.
-	rawB := grayPad(imgB, c.w)
-	tryTranslation := func(tryAngle, tryScale float64) (transResult, error) {
-		transformedA := BilinearWarp(imgA, -tryAngle, tryScale)
-		rawTransA := grayPad(transformedA, c.w)
-
-		if err := c.complexA.UploadSlice(c.ctx, realToComplex(rawTransA)); err != nil {
-			return transResult{}, err
-		}
-		if err := c.complexB.UploadSlice(c.ctx, realToComplex(rawB)); err != nil {
-			return transResult{}, err
-		}
-
-		rec, err := c.ctx.NewCommandRecorder()
-		if err != nil {
-			return transResult{}, err
-		}
-		recordFFT2D(rec, c.complexA.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevA, c.pipeButterflyA, c.w, c.h, false)
-		recordFFT2D(rec, c.complexB.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevB, c.pipeButterflyB, c.w, c.h, false)
-
-		// Phase-normalized cross-power spectrum (paper eq. 3).
-		transParams := encodeU32Params(n, 1)
-		rec.UpdateBuffer(paramsBuf, 0, transParams)
-		rec.BarrierTransferToCompute(paramsBuf)
-		rec.Bind(c.pipeCrosspowerTrans)
-		rec.Dispatch(groups, 1, 1)
-		rec.Barrier(c.crossPow.Buf.DeviceBuffer)
-
-		recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.w, c.h, true)
-
-		if err := rec.Submit(); err != nil {
-			return transResult{}, fmt.Errorf("imgproc: phase2 FFT: %w", err)
-		}
-
-		transData, err := c.crossPow.DownloadSlice(c.ctx)
-		if err != nil {
-			return transResult{}, err
-		}
-		normalizeComplex(transData[:n], c.w*c.h)
-		ptx, pty, peakMag := find2DPeakWithMag(transData[:n], c.w, c.h)
-		fmt.Printf("DEBUG: translation peak (%f, %f) mag=%f angle=%.1f\n", ptx, pty, peakMag, tryAngle)
-
-		// Handle wraparound: negative shifts appear in upper half.
-		if ptx > float64(c.w)/2 {
-			ptx -= float64(c.w)
-		}
-		if pty > float64(c.h)/2 {
-			pty -= float64(c.h)
-		}
-
-		// Negate: cross-power F(A)*conj(F(B)) with B=A shifted by t
-		// gives peak at -t, so negate to recover the actual translation.
-		return transResult{tryAngle, tryScale, -ptx, -pty, peakMag}, nil
+	// Disambiguate: pick the 180° variant with higher peak magnitude.
+	bestAngle := angleDeg
+	bestTx, bestTy := tx1, ty1
+	if mag2 > mag1 {
+		bestAngle = angleDeg + 180
+		bestTx, bestTy = tx2, ty2
 	}
 
-	res1, err := tryTranslation(angle, scale)
-	if err != nil {
-		return nil, err
-	}
-	res2, err := tryTranslation(angle+180, scale)
-	if err != nil {
-		return nil, err
-	}
-
-	best := res1
-	if res2.peak > res1.peak {
-		best = res2
-	}
-	fmt.Printf("DEBUG: chose angle=%.2f° (peak1=%f peak2=%f)\n", best.angle, res1.peak, res2.peak)
+	fmt.Printf("DEBUG: chose angle=%.2f° (peak1=%f peak2=%f)\n", bestAngle, mag1, mag2)
 
 	return &Result{
-		Angle: best.angle,
-		Scale: best.scale,
-		Tx:    best.tx,
-		Ty:    best.ty,
+		Angle: bestAngle,
+		Scale: scale,
+		Tx:    bestTx,
+		Ty:    bestTy,
 	}, nil
 }
 
@@ -610,12 +663,6 @@ func (c *Correlator) Close() {
 	}
 	if c.rgbaB != nil {
 		c.rgbaB.Destroy(c.ctx)
-	}
-	if c.grayA != nil {
-		c.grayA.Destroy(c.ctx)
-	}
-	if c.grayB != nil {
-		c.grayB.Destroy(c.ctx)
 	}
 	if c.complexA != nil {
 		c.complexA.Destroy(c.ctx)
@@ -638,7 +685,52 @@ func (c *Correlator) Close() {
 	if c.crossPow != nil {
 		c.crossPow.Destroy(c.ctx)
 	}
+	if c.result != nil {
+		c.result.Destroy(c.ctx)
+	}
 	if c.params != nil {
 		c.params.Destroy(c.ctx)
 	}
+}
+
+// pixToU32 reinterprets RGBA pixel bytes as packed uint32 without copying.
+func pixToU32(pix []byte) []uint32 {
+	if len(pix) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*uint32)(unsafe.Pointer(&pix[0])), len(pix)/4)
+}
+
+// encodeGrayPadParams encodes parameters for the grayscale_pad shader.
+func encodeGrayPadParams(srcW, srcH, srcStride, padSize, cropSize uint32) []byte {
+	buf := make([]byte, 20)
+	binary.LittleEndian.PutUint32(buf[0:4], srcW)
+	binary.LittleEndian.PutUint32(buf[4:8], srcH)
+	binary.LittleEndian.PutUint32(buf[8:12], srcStride)
+	binary.LittleEndian.PutUint32(buf[12:16], padSize)
+	binary.LittleEndian.PutUint32(buf[16:20], cropSize)
+	return buf
+}
+
+// encodeWarpParams encodes parameters for the bilinear_warp_gray shader.
+func encodeWarpParams(srcW, srcH, srcStride, padSize, cropSize, warpSlot uint32) []byte {
+	buf := make([]byte, 24)
+	binary.LittleEndian.PutUint32(buf[0:4], srcW)
+	binary.LittleEndian.PutUint32(buf[4:8], srcH)
+	binary.LittleEndian.PutUint32(buf[8:12], srcStride)
+	binary.LittleEndian.PutUint32(buf[12:16], padSize)
+	binary.LittleEndian.PutUint32(buf[16:20], cropSize)
+	binary.LittleEndian.PutUint32(buf[20:24], warpSlot)
+	return buf
+}
+
+// encodePeakFindParams encodes parameters for the peak_find shader.
+func encodePeakFindParams(width, height, mode, resultOffset uint32, logRmax float32) []byte {
+	buf := make([]byte, 20)
+	binary.LittleEndian.PutUint32(buf[0:4], width)
+	binary.LittleEndian.PutUint32(buf[4:8], height)
+	binary.LittleEndian.PutUint32(buf[8:12], mode)
+	binary.LittleEndian.PutUint32(buf[12:16], resultOffset)
+	binary.LittleEndian.PutUint32(buf[16:20], math.Float32bits(logRmax))
+	return buf
 }
