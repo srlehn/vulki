@@ -1,6 +1,34 @@
+# ignore all Markdown files by default
 *.md
+!README.md
+
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
 /correlate
 /demo
+
+/go.work
+/go.work.sum
+
+# generated images (root only; keeps testdata fixtures)
+/*.[pP][nN][gG]
+/*.[jJ][pP][gG]
+/*.[jJ][pP][eE][gG]
+/*.[bB][mM][pP]
+/*.[gG][iI][fF]
+/*.[wW][eE][bB][pP]
+
 /testdata/scikit-image/
 /testdata/venv/
+/testdata/snake_*.png
+!/testdata/snake.png
+!/testdata/snake_rot_12deg.png
 /selftest_*.png
+
+.vscode/
+.idea/
+*.code-workspace

@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"math"
 
-	"vkpg/compute"
-	"vkpg/vk"
+	"github.com/srlehn/vulki/compute"
+	"github.com/srlehn/vulki/vk"
 )
 
 // fftParams holds the parameters written to the GPU params buffer for bit-reversal.

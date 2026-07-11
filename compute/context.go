@@ -4,20 +4,20 @@ import (
 	"fmt"
 	"syscall"
 
-	"vkpg/vk"
+	"github.com/srlehn/vulki/vk"
 )
 
 // Context holds the Vulkan instance, device, and queue for compute operations.
 type Context struct {
-	Loader       *vk.Loader
-	InstFuncs    *vk.InstanceFuncs
-	DevFuncs     *vk.DeviceFuncs
-	Instance     vk.Instance
-	PhysDevice   vk.PhysicalDevice
-	Device       vk.Device
-	Queue        vk.Queue
-	QueueFamily  uint32
-	MemProps     vk.PhysicalDeviceMemoryProperties
+	Loader      *vk.Loader
+	InstFuncs   *vk.InstanceFuncs
+	DevFuncs    *vk.DeviceFuncs
+	Instance    vk.Instance
+	PhysDevice  vk.PhysicalDevice
+	Device      vk.Device
+	Queue       vk.Queue
+	QueueFamily uint32
+	MemProps    vk.PhysicalDeviceMemoryProperties
 }
 
 // NewContext creates a Vulkan instance, selects a physical device with a compute
@@ -35,8 +35,8 @@ func NewContext() (*Context, error) {
 		return nil, err
 	}
 
-	appName, _ := syscall.BytePtrFromString("vkpg")
-	engineName, _ := syscall.BytePtrFromString("vkpg")
+	appName, _ := syscall.BytePtrFromString("vulki")
+	engineName, _ := syscall.BytePtrFromString("vulki")
 
 	appInfo := vk.ApplicationInfo{
 		SType:              vk.StructureTypeApplicationInfo,

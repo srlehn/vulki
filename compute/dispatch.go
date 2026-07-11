@@ -1,6 +1,6 @@
 package compute
 
-import "vkpg/vk"
+import "github.com/srlehn/vulki/vk"
 
 // Dispatch records and submits a compute dispatch command.
 func (c *Context) Dispatch(pipeline *Pipeline, groupCountX, groupCountY, groupCountZ uint32) error {

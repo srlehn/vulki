@@ -12,8 +12,9 @@ import (
 	"os/exec"
 	"strconv"
 	"time"
-	"vkpg/compute"
-	"vkpg/imgproc"
+
+	"github.com/srlehn/vulki/compute"
+	"github.com/srlehn/vulki/imgproc"
 )
 
 func main() {
@@ -92,9 +93,9 @@ func runSelfTest(path string, save bool) error {
 	w, h := bounds.Dx(), bounds.Dy()
 
 	// Generate random transform params.
-	gtTx := rand.IntN(101) - 50        // [-50, 50]
-	gtTy := rand.IntN(101) - 50        // [-50, 50]
-	gtRot := rand.Float64()*90 - 45    // [-45, 45] degrees
+	gtTx := rand.IntN(101) - 50         // [-50, 50]
+	gtTy := rand.IntN(101) - 50         // [-50, 50]
+	gtRot := rand.Float64()*90 - 45     // [-45, 45] degrees
 	gtScale := rand.Float64()*0.8 + 0.7 // [0.7, 1.5]
 
 	fmt.Println("=== Self-test mode ===")

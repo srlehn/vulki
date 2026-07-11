@@ -1,14 +1,14 @@
 package compute
 
-import "vkpg/vk"
+import "github.com/srlehn/vulki/vk"
 
 // CommandRecorder batches multiple dispatches, barriers, and buffer updates
 // into a single command buffer for efficient GPU submission.
 type CommandRecorder struct {
-	ctx      *Context
-	pool     vk.CommandPool
-	cb       vk.CommandBuffer
-	curPipe  *Pipeline
+	ctx     *Context
+	pool    vk.CommandPool
+	cb      vk.CommandBuffer
+	curPipe *Pipeline
 }
 
 // NewCommandRecorder allocates a command pool and command buffer, and begins recording.

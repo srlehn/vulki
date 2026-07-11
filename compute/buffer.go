@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"vkpg/vk"
+	"github.com/srlehn/vulki/vk"
 )
 
 // Buffer wraps a device-local Vulkan buffer with a host-visible staging buffer for transfers.

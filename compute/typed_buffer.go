@@ -3,7 +3,7 @@ package compute
 import (
 	"unsafe"
 
-	"vkpg/vk"
+	"github.com/srlehn/vulki/vk"
 )
 
 // TypedBuffer wraps a Buffer with compile-time type safety for element access.

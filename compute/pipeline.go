@@ -3,17 +3,17 @@ package compute
 import (
 	"unsafe"
 
-	"vkpg/vk"
+	"github.com/srlehn/vulki/vk"
 )
 
 // Pipeline holds a compute pipeline and its associated descriptor resources.
 type Pipeline struct {
-	ShaderModule      vk.ShaderModule
-	DescSetLayout     vk.DescriptorSetLayout
-	PipelineLayout    vk.PipelineLayout
-	Pipeline          vk.Pipeline
-	DescPool          vk.DescriptorPool
-	DescSet           vk.DescriptorSet
+	ShaderModule   vk.ShaderModule
+	DescSetLayout  vk.DescriptorSetLayout
+	PipelineLayout vk.PipelineLayout
+	Pipeline       vk.Pipeline
+	DescPool       vk.DescriptorPool
+	DescSet        vk.DescriptorSet
 }
 
 // BufferBinding associates a binding index with a buffer.

@@ -1,4 +1,4 @@
-module vkpg
+module github.com/srlehn/vulki
 
 go 1.26.0
 

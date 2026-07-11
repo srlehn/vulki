@@ -1,10 +1,10 @@
 package imgproc
 
 import (
+	"github.com/srlehn/vulki/compute"
+	"github.com/srlehn/vulki/shader"
+	"github.com/srlehn/vulki/vk"
 	"testing"
-	"vkpg/compute"
-	"vkpg/shader"
-	"vkpg/vk"
 )
 
 func TestFftshift(t *testing.T) {

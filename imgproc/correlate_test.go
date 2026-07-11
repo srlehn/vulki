@@ -9,9 +9,9 @@ import (
 	"os"
 	"testing"
 
-	"vkpg/compute"
-	"vkpg/shader"
-	"vkpg/vk"
+	"github.com/srlehn/vulki/compute"
+	"github.com/srlehn/vulki/shader"
+	"github.com/srlehn/vulki/vk"
 )
 
 // testContext creates a Vulkan compute context, skipping if unavailable.
@@ -557,8 +557,8 @@ func TestPhaseCorrelation_KnownTranslation(t *testing.T) {
 	for i := range sigB {
 		x := i % w
 		y := i / w
-		srcX := ((x - shiftX) % w + w) % w
-		srcY := ((y - shiftY) % h + h) % h
+		srcX := ((x-shiftX)%w + w) % w
+		srcY := ((y-shiftY)%h + h) % h
 		sigB[i] = sigA[srcY*w+srcX]
 	}
 

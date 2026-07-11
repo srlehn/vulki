@@ -8,9 +8,9 @@ import (
 	"math"
 	"unsafe"
 
-	"vkpg/compute"
-	"vkpg/shader"
-	"vkpg/vk"
+	"github.com/srlehn/vulki/compute"
+	"github.com/srlehn/vulki/shader"
+	"github.com/srlehn/vulki/vk"
 )
 
 //go:embed shaders/grayscale_pad.wgsl
