@@ -2,6 +2,7 @@ package vk
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"unsafe"
 )
@@ -60,5 +61,43 @@ func TestDeviceFunctionReturnsStructuredResult(t *testing.T) {
 	}
 	if vkErr.Op != "vkDeviceWaitIdle" || vkErr.Result != ErrorDeviceLost {
 		t.Fatalf("DeviceWaitIdle error = %#v", vkErr)
+	}
+}
+
+func TestCreateDeviceRejectsNilInfo(t *testing.T) {
+	functions := &InstanceFuncs{}
+	_, err := functions.CreateDevice(PhysicalDevice(1), nil)
+	if err == nil || !strings.Contains(err.Error(), "vkCreateDevice") {
+		t.Fatalf("CreateDevice error = %v, want operation context", err)
+	}
+}
+
+func TestEnumeratePhysicalDevicesRejectsInvalidState(t *testing.T) {
+	if _, err := (*InstanceFuncs)(nil).EnumeratePhysicalDevices(Instance(1)); err == nil {
+		t.Fatal("nil InstanceFuncs enumeration succeeded")
+	}
+	functions := &InstanceFuncs{enumeratePhysicalDevices: func(Instance, *uint32, *PhysicalDevice) Result {
+		return Success
+	}}
+	if _, err := functions.EnumeratePhysicalDevices(0); err == nil {
+		t.Fatal("null instance enumeration succeeded")
+	}
+}
+
+func TestQueueFamilyEnumerationClampsInvalidDriverCount(t *testing.T) {
+	functions := &InstanceFuncs{
+		getPhysicalDeviceQueueFamilyProps: func(_ PhysicalDevice, count *uint32, properties *QueueFamilyProperties) {
+			if properties == nil {
+				*count = 1
+				return
+			}
+			*properties = QueueFamilyProperties{QueueCount: 4}
+			*count = 2
+		},
+	}
+
+	properties := functions.GetPhysicalDeviceQueueFamilyProperties(PhysicalDevice(1))
+	if len(properties) != 1 || properties[0].QueueCount != 4 {
+		t.Fatalf("properties = %v, want one clamped result", properties)
 	}
 }

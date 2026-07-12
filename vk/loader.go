@@ -41,13 +41,19 @@ func Open() (*Loader, error) {
 
 // GetInstanceProcAddr resolves a Vulkan function by name.
 func (l *Loader) GetInstanceProcAddr(instance Instance, name string) uintptr {
-	cname, _ := syscall.BytePtrFromString(name)
+	if l == nil || l.getProc == nil || name == "" {
+		return 0
+	}
+	cname, err := syscall.BytePtrFromString(name)
+	if err != nil {
+		return 0
+	}
 	return l.getProc(instance, cname)
 }
 
 // Close releases the library handle.
 func (l *Loader) Close() {
-	if l.lib != 0 {
+	if l != nil && l.lib != 0 {
 		purego.Dlclose(l.lib)
 		l.lib = 0
 	}

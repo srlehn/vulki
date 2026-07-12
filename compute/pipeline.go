@@ -162,7 +162,7 @@ func (c *Context) CreateComputePipeline(spirv []byte, bindings []BufferBinding) 
 			PBufferInfo:     &bufInfos[i],
 		}
 	}
-	c.DevFuncs.UpdateDescriptorSets(c.Device, writes)
+	c.DevFuncs.WriteDescriptorSets(c.Device, writes)
 
 	return p, nil
 }

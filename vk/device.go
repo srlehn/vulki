@@ -146,6 +146,9 @@ func (f *DeviceFuncs) GetDeviceQueue(device Device, familyIndex, queueIndex uint
 }
 
 func (f *DeviceFuncs) CreateBuffer(device Device, info *BufferCreateInfo) (Buffer, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateBuffer requires create info")
+	}
 	var buf Buffer
 	res := f.createBuffer(device, info, 0, &buf)
 	if res != Success {
@@ -165,6 +168,9 @@ func (f *DeviceFuncs) GetBufferMemoryRequirements(device Device, buffer Buffer) 
 }
 
 func (f *DeviceFuncs) AllocateMemory(device Device, info *MemoryAllocateInfo) (DeviceMemory, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkAllocateMemory requires allocation info")
+	}
 	var mem DeviceMemory
 	res := f.allocateMemory(device, info, 0, &mem)
 	if res != Success {
@@ -199,6 +205,9 @@ func (f *DeviceFuncs) UnmapMemory(device Device, memory DeviceMemory) {
 }
 
 func (f *DeviceFuncs) CreateShaderModule(device Device, info *ShaderModuleCreateInfo) (ShaderModule, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateShaderModule requires create info")
+	}
 	var mod ShaderModule
 	res := f.createShaderModule(device, info, 0, &mod)
 	if res != Success {
@@ -212,6 +221,9 @@ func (f *DeviceFuncs) DestroyShaderModule(device Device, module ShaderModule) {
 }
 
 func (f *DeviceFuncs) CreateDescriptorSetLayout(device Device, info *DescriptorSetLayoutCreateInfo) (DescriptorSetLayout, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateDescriptorSetLayout requires create info")
+	}
 	var layout DescriptorSetLayout
 	res := f.createDescriptorSetLayout(device, info, 0, &layout)
 	if res != Success {
@@ -225,6 +237,9 @@ func (f *DeviceFuncs) DestroyDescriptorSetLayout(device Device, layout Descripto
 }
 
 func (f *DeviceFuncs) CreatePipelineLayout(device Device, info *PipelineLayoutCreateInfo) (PipelineLayout, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreatePipelineLayout requires create info")
+	}
 	var layout PipelineLayout
 	res := f.createPipelineLayout(device, info, 0, &layout)
 	if res != Success {
@@ -237,13 +252,23 @@ func (f *DeviceFuncs) DestroyPipelineLayout(device Device, layout PipelineLayout
 	f.destroyPipelineLayout(device, layout, 0)
 }
 
+// CreateComputePipelines creates compute pipelines without a pipeline cache or
+// allocation callbacks. It destroys every non-null result if creation fails.
 func (f *DeviceFuncs) CreateComputePipelines(device Device, infos []ComputePipelineCreateInfo) ([]Pipeline, error) {
+	if f == nil || f.createComputePipelines == nil || f.destroyPipeline == nil {
+		return nil, fmt.Errorf("vk: device functions are not loaded")
+	}
 	if len(infos) == 0 {
 		return nil, fmt.Errorf("vkCreateComputePipelines requires at least one create info")
 	}
 	pipelines := make([]Pipeline, len(infos))
 	res := f.createComputePipelines(device, 0, uint32(len(infos)), &infos[0], 0, &pipelines[0])
 	if res != Success {
+		for _, pipeline := range pipelines {
+			if pipeline != 0 {
+				f.destroyPipeline(device, pipeline, 0)
+			}
+		}
 		return nil, resultError("vkCreateComputePipelines", res)
 	}
 	return pipelines, nil
@@ -254,6 +279,9 @@ func (f *DeviceFuncs) DestroyPipeline(device Device, pipeline Pipeline) {
 }
 
 func (f *DeviceFuncs) CreateDescriptorPool(device Device, info *DescriptorPoolCreateInfo) (DescriptorPool, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateDescriptorPool requires create info")
+	}
 	var pool DescriptorPool
 	res := f.createDescriptorPool(device, info, 0, &pool)
 	if res != Success {
@@ -278,7 +306,9 @@ func (f *DeviceFuncs) AllocateDescriptorSets(device Device, info *DescriptorSetA
 	return sets, nil
 }
 
-func (f *DeviceFuncs) UpdateDescriptorSets(device Device, writes []WriteDescriptorSet) {
+// WriteDescriptorSets updates descriptor sets with writes. Descriptor copies
+// are not supported by this wrapper.
+func (f *DeviceFuncs) WriteDescriptorSets(device Device, writes []WriteDescriptorSet) {
 	if len(writes) == 0 {
 		return
 	}
@@ -286,6 +316,9 @@ func (f *DeviceFuncs) UpdateDescriptorSets(device Device, writes []WriteDescript
 }
 
 func (f *DeviceFuncs) CreateCommandPool(device Device, info *CommandPoolCreateInfo) (CommandPool, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateCommandPool requires create info")
+	}
 	var pool CommandPool
 	res := f.createCommandPool(device, info, 0, &pool)
 	if res != Success {
@@ -311,6 +344,9 @@ func (f *DeviceFuncs) AllocateCommandBuffers(device Device, info *CommandBufferA
 }
 
 func (f *DeviceFuncs) BeginCommandBuffer(cb CommandBuffer, info *CommandBufferBeginInfo) error {
+	if info == nil {
+		return fmt.Errorf("vk: vkBeginCommandBuffer requires begin info")
+	}
 	res := f.beginCommandBuffer(cb, info)
 	if res != Success {
 		return resultError("vkBeginCommandBuffer", res)
@@ -348,7 +384,9 @@ func (f *DeviceFuncs) CmdCopyBuffer(cb CommandBuffer, src, dst Buffer, regions [
 	f.cmdCopyBuffer(cb, src, dst, uint32(len(regions)), &regions[0])
 }
 
-func (f *DeviceFuncs) CmdPipelineBarrier(cb CommandBuffer, srcStage, dstStage PipelineStageFlags, bufBarriers []BufferMemoryBarrier) {
+// CmdPipelineBarrierBuffers records buffer memory barriers with no dependency
+// flags, memory barriers, or image barriers.
+func (f *DeviceFuncs) CmdPipelineBarrierBuffers(cb CommandBuffer, srcStage, dstStage PipelineStageFlags, bufBarriers []BufferMemoryBarrier) {
 	var pBuf *BufferMemoryBarrier
 	if len(bufBarriers) > 0 {
 		pBuf = &bufBarriers[0]
@@ -357,6 +395,9 @@ func (f *DeviceFuncs) CmdPipelineBarrier(cb CommandBuffer, srcStage, dstStage Pi
 }
 
 func (f *DeviceFuncs) CreateFence(device Device, info *FenceCreateInfo) (Fence, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateFence requires create info")
+	}
 	var fence Fence
 	res := f.createFence(device, info, 0, &fence)
 	if res != Success {
@@ -456,5 +497,7 @@ func (f *DeviceFuncs) CmdUpdateBuffer(cb CommandBuffer, dst Buffer, offset uint6
 }
 
 func (f *DeviceFuncs) DestroyDevice(device Device) {
-	f.destroyDevice(device, 0)
+	if f != nil && f.destroyDevice != nil && device != 0 {
+		f.destroyDevice(device, 0)
+	}
 }

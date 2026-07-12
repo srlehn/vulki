@@ -2,6 +2,7 @@ package vk
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ebitengine/purego"
 )
@@ -101,12 +102,18 @@ func (f *GlobalFuncs) CreateInstance(info *InstanceCreateInfo) (Instance, error)
 }
 
 func (f *InstanceFuncs) DestroyInstance(instance Instance) {
-	if f.destroyInstance != nil {
+	if f != nil && f.destroyInstance != nil && instance != 0 {
 		f.destroyInstance(instance, 0)
 	}
 }
 
 func (f *InstanceFuncs) EnumeratePhysicalDevices(instance Instance) ([]PhysicalDevice, error) {
+	if f == nil || f.enumeratePhysicalDevices == nil {
+		return nil, fmt.Errorf("vk: instance functions are not loaded")
+	}
+	if instance == 0 {
+		return nil, fmt.Errorf("vk: vkEnumeratePhysicalDevices requires an instance")
+	}
 	for {
 		var count uint32
 		res := f.enumeratePhysicalDevices(instance, &count, nil)
@@ -138,11 +145,17 @@ func (f *InstanceFuncs) EnumeratePhysicalDevices(instance Instance) ([]PhysicalD
 
 func (f *InstanceFuncs) GetPhysicalDeviceProperties(device PhysicalDevice) PhysicalDeviceProperties {
 	var props PhysicalDeviceProperties
+	if f == nil || f.getPhysicalDeviceProperties == nil || device == 0 {
+		return props
+	}
 	f.getPhysicalDeviceProperties(device, &props)
 	return props
 }
 
 func (f *InstanceFuncs) GetPhysicalDeviceQueueFamilyProperties(device PhysicalDevice) []QueueFamilyProperties {
+	if f == nil || f.getPhysicalDeviceQueueFamilyProps == nil || device == 0 {
+		return nil
+	}
 	var count uint32
 	f.getPhysicalDeviceQueueFamilyProps(device, &count, nil)
 	if count == 0 {
@@ -150,16 +163,31 @@ func (f *InstanceFuncs) GetPhysicalDeviceQueueFamilyProperties(device PhysicalDe
 	}
 	props := make([]QueueFamilyProperties, count)
 	f.getPhysicalDeviceQueueFamilyProps(device, &count, &props[0])
+	if count > uint32(len(props)) {
+		count = uint32(len(props))
+	}
 	return props[:count]
 }
 
 func (f *InstanceFuncs) GetPhysicalDeviceMemoryProperties(device PhysicalDevice) PhysicalDeviceMemoryProperties {
 	var props PhysicalDeviceMemoryProperties
+	if f == nil || f.getPhysicalDeviceMemoryProperties == nil || device == 0 {
+		return props
+	}
 	f.getPhysicalDeviceMemoryProperties(device, &props)
 	return props
 }
 
 func (f *InstanceFuncs) CreateDevice(physicalDevice PhysicalDevice, info *DeviceCreateInfo) (Device, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateDevice requires create info")
+	}
+	if physicalDevice == 0 {
+		return 0, fmt.Errorf("vk: vkCreateDevice requires a physical device")
+	}
+	if f == nil || f.createDevice == nil {
+		return 0, fmt.Errorf("vk: instance functions are not loaded")
+	}
 	var dev Device
 	res := f.createDevice(physicalDevice, info, 0, &dev)
 	if res != Success {
@@ -169,6 +197,9 @@ func (f *InstanceFuncs) CreateDevice(physicalDevice PhysicalDevice, info *Device
 }
 
 func (f *InstanceFuncs) GetDeviceProcAddr(device Device, name string) uintptr {
+	if f == nil || f.getDeviceProcAddr == nil || device == 0 || name == "" || strings.IndexByte(name, 0) >= 0 {
+		return 0
+	}
 	cname := append([]byte(name), 0)
 	return f.getDeviceProcAddr(device, &cname[0])
 }

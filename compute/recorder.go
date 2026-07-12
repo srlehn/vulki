@@ -78,7 +78,7 @@ func (r *CommandRecorder) Barrier(bufs ...vk.Buffer) {
 			Size:                vk.WholeSize,
 		}
 	}
-	r.ctx.DevFuncs.CmdPipelineBarrier(r.cb, vk.PipelineStageComputeShaderBit, vk.PipelineStageComputeShaderBit, barriers)
+	r.ctx.DevFuncs.CmdPipelineBarrierBuffers(r.cb, vk.PipelineStageComputeShaderBit, vk.PipelineStageComputeShaderBit, barriers)
 }
 
 // BarrierTransferToCompute inserts a transfer-to-compute barrier for UpdateBuffer results.
@@ -96,7 +96,7 @@ func (r *CommandRecorder) BarrierTransferToCompute(bufs ...vk.Buffer) {
 			Size:                vk.WholeSize,
 		}
 	}
-	r.ctx.DevFuncs.CmdPipelineBarrier(r.cb, vk.PipelineStageTransferBit, vk.PipelineStageComputeShaderBit, barriers)
+	r.ctx.DevFuncs.CmdPipelineBarrierBuffers(r.cb, vk.PipelineStageTransferBit, vk.PipelineStageComputeShaderBit, barriers)
 }
 
 // UpdateBuffer writes small data (<=64KB) into a buffer from the command stream.
@@ -113,7 +113,7 @@ func (r *CommandRecorder) UpdateBuffer(buf vk.Buffer, offset uint64, data []byte
 		Offset:              0,
 		Size:                vk.WholeSize,
 	}
-	r.ctx.DevFuncs.CmdPipelineBarrier(
+	r.ctx.DevFuncs.CmdPipelineBarrierBuffers(
 		r.cb,
 		vk.PipelineStageComputeShaderBit,
 		vk.PipelineStageTransferBit,
@@ -155,7 +155,7 @@ func (r *CommandRecorder) CopyToStaging(buf *Buffer, size uint64) error {
 		Offset:              0,
 		Size:                size,
 	}
-	r.ctx.DevFuncs.CmdPipelineBarrier(
+	r.ctx.DevFuncs.CmdPipelineBarrierBuffers(
 		r.cb,
 		vk.PipelineStageComputeShaderBit,
 		vk.PipelineStageTransferBit,
