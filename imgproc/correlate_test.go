@@ -786,7 +786,7 @@ func TestLogPolar_SamplesFromDC(t *testing.T) {
 	}
 }
 
-// --- Phase 1 debug: test rotation detection with real images ---
+// --- Full registration tests with real image content ---
 
 func TestPhase1_RotationDetection(t *testing.T) {
 	ctx := testContext(t)
@@ -816,6 +816,9 @@ func TestPhase1_RotationDetection(t *testing.T) {
 	if math.Abs(result.Scale-1) > 0.1 {
 		t.Errorf("scale = %v, want about 1", result.Scale)
 	}
+	if math.Abs(result.Tx) > 1 || math.Abs(result.Ty) > 1 {
+		t.Errorf("translation = (%v,%v), want about (0,0)", result.Tx, result.Ty)
+	}
 	if result.RotationConfidence <= minimumMatchConfidence || result.TranslationConfidence <= minimumMatchConfidence {
 		t.Errorf("unexpected confidence: rotation=%v translation=%v",
 			result.RotationConfidence, result.TranslationConfidence)
@@ -825,6 +828,55 @@ func TestPhase1_RotationDetection(t *testing.T) {
 	if _, err := corr.PhaseCorrelate(blank, blank); !errors.Is(err, ErrLowConfidence) {
 		t.Fatalf("blank-image error = %v, want ErrLowConfidence", err)
 	}
+}
+
+func TestPhaseCorrelate_KnownTransform(t *testing.T) {
+	ctx := testContext(t)
+
+	const (
+		wantAngle = 12.0
+		wantScale = 1.15
+		wantTx    = 15
+		wantTy    = -20
+	)
+	imgA := loadTestImage(t, "../testdata/snake.png")
+	imgB := translateImageForTest(BilinearWarp(imgA, -wantAngle, wantScale), wantTx, wantTy)
+	corr, err := NewCorrelator(ctx, imgA.Bounds().Dx(), imgA.Bounds().Dy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer corr.Close()
+
+	result, err := corr.PhaseCorrelate(imgA, imgB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("registration result: angle=%.3f scale=%.5f translation=(%.3f, %.3f)",
+		result.Angle, result.Scale, result.Tx, result.Ty)
+
+	angleDelta := math.Mod(result.Angle-wantAngle+180, 360) - 180
+	if math.Abs(angleDelta) > 2 {
+		t.Errorf("angle = %v degrees, want about %v degrees", result.Angle, wantAngle)
+	}
+	if math.Abs(result.Scale-wantScale) > 0.05 {
+		t.Errorf("scale = %v, want about %v", result.Scale, wantScale)
+	}
+	if math.Abs(result.Tx-wantTx) > 3 || math.Abs(result.Ty-wantTy) > 3 {
+		t.Errorf("translation = (%v,%v), want about (%v,%v)", result.Tx, result.Ty, wantTx, wantTy)
+	}
+}
+
+func translateImageForTest(src *image.RGBA, tx, ty int) *image.RGBA {
+	bounds := src.Bounds()
+	dst := image.NewRGBA(bounds)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			sx := min(max(x-tx, bounds.Min.X), bounds.Max.X-1)
+			sy := min(max(y-ty, bounds.Min.Y), bounds.Max.Y-1)
+			dst.SetRGBA(x, y, src.RGBAAt(sx, sy))
+		}
+	}
+	return dst
 }
 
 func loadTestImage(t *testing.T, path string) *image.RGBA {

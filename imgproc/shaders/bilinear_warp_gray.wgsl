@@ -74,7 +74,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Read warp parameters from result buffer.
     let cos_slot = 4u + params.warp_slot * 2u; // slot 0: [4,5], slot 1: [6,7]
     let cos_a = result[cos_slot];
-    let sin_a = result[cos_slot + 1u];
+    // Phase 2 applies the inverse detected rotation, matching the CPU
+    // BilinearWarp(imgA, -angle, scale) reference path.
+    let sin_a = -result[cos_slot + 1u];
     let scale = result[3]; // scale is always at index 3
 
     // Inverse rotation+scale around image center.
