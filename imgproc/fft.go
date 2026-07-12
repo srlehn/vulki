@@ -105,6 +105,18 @@ func recordFFT1D(
 	}
 }
 
+// recordNormalize records an IFFT normalization: divide all complex elements by N.
+// This reuses the butterfly pipeline params buffer for writing a scale factor,
+// but actually we do this on the CPU after download for simplicity.
+
+// normalizeComplex divides each complex element by n (for IFFT normalization on CPU).
+func normalizeComplex(data [][2]float32, n int) {
+	inv := float32(1.0 / float64(n))
+	for i := range data {
+		data[i][0] *= inv
+		data[i][1] *= inv
+	}
+}
 
 func encodeBitrevParams(p fftBitrevParams) []byte {
 	buf := make([]byte, 20)
