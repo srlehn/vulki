@@ -18,6 +18,7 @@ type Buffer struct {
 	memory        vk.DeviceMemory
 	stagingBuffer vk.Buffer
 	stagingMemory vk.DeviceMemory
+	bindings      int
 	closed        bool
 }
 
@@ -34,6 +35,7 @@ type deviceOps struct {
 	destroyCommandPool       func(*vk.DeviceFuncs, vk.Device, vk.CommandPool)
 	allocateCommandBuffers   func(*vk.DeviceFuncs, vk.Device, *vk.CommandBufferAllocateInfo) ([]vk.CommandBuffer, error)
 	beginCommandBuffer       func(*vk.DeviceFuncs, vk.CommandBuffer, *vk.CommandBufferBeginInfo) error
+	bufferBarriers           func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier)
 	copyBuffer               func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, vk.Buffer, []vk.BufferCopy)
 	endCommandBuffer         func(*vk.DeviceFuncs, vk.CommandBuffer) error
 	createFence              func(*vk.DeviceFuncs, vk.Device, *vk.FenceCreateInfo) (vk.Fence, error)
@@ -78,6 +80,9 @@ var directDeviceOps = deviceOps{
 	},
 	beginCommandBuffer: func(functions *vk.DeviceFuncs, buffer vk.CommandBuffer, info *vk.CommandBufferBeginInfo) error {
 		return functions.BeginCommandBuffer(buffer, info)
+	},
+	bufferBarriers: func(functions *vk.DeviceFuncs, command vk.CommandBuffer, source, destination vk.PipelineStageFlags, barriers []vk.BufferMemoryBarrier) {
+		functions.CmdPipelineBarrierBuffers(command, source, destination, barriers)
 	},
 	copyBuffer: func(functions *vk.DeviceFuncs, command vk.CommandBuffer, source, destination vk.Buffer, regions []vk.BufferCopy) {
 		functions.CmdCopyBuffer(command, source, destination, regions)
@@ -203,7 +208,27 @@ func (b *Buffer) UploadAt(offset uint64, data []byte) error {
 	}
 	copy(unsafe.Slice((*byte)(pointer), len(data)), data)
 	state.ops.unmapMemory(state.deviceFns, state.device, b.stagingMemory)
-	if err := b.device.copyBufferAndWait(state, b.stagingBuffer, b.buffer, 0, offset, uint64(len(data))); err != nil {
+	barrier := vk.BufferMemoryBarrier{
+		SType:               vk.StructureTypeBufferMemoryBarrier,
+		SrcAccessMask:       vk.AccessShaderReadBit | vk.AccessShaderWriteBit | vk.AccessTransferWriteBit,
+		DstAccessMask:       vk.AccessTransferWriteBit,
+		SrcQueueFamilyIndex: ^uint32(0),
+		DstQueueFamilyIndex: ^uint32(0),
+		Buffer:              b.buffer,
+		Offset:              offset,
+		Size:                uint64(len(data)),
+	}
+	if err := b.device.copyBufferAndWait(
+		state,
+		b.stagingBuffer,
+		b.buffer,
+		0,
+		offset,
+		uint64(len(data)),
+		vk.PipelineStageComputeShaderBit|vk.PipelineStageTransferBit,
+		vk.PipelineStageTransferBit,
+		barrier,
+	); err != nil {
 		return fmt.Errorf("vulki: upload buffer: %w", err)
 	}
 	return nil
@@ -237,7 +262,27 @@ func (b *Buffer) DownloadAt(offset uint64, destination []byte) error {
 	if err := b.ensureStaging(state); err != nil {
 		return err
 	}
-	if err := b.device.copyBufferAndWait(state, b.buffer, b.stagingBuffer, offset, 0, uint64(len(destination))); err != nil {
+	barrier := vk.BufferMemoryBarrier{
+		SType:               vk.StructureTypeBufferMemoryBarrier,
+		SrcAccessMask:       vk.AccessShaderWriteBit | vk.AccessTransferWriteBit,
+		DstAccessMask:       vk.AccessTransferReadBit,
+		SrcQueueFamilyIndex: ^uint32(0),
+		DstQueueFamilyIndex: ^uint32(0),
+		Buffer:              b.buffer,
+		Offset:              offset,
+		Size:                uint64(len(destination)),
+	}
+	if err := b.device.copyBufferAndWait(
+		state,
+		b.buffer,
+		b.stagingBuffer,
+		offset,
+		0,
+		uint64(len(destination)),
+		vk.PipelineStageComputeShaderBit|vk.PipelineStageTransferBit,
+		vk.PipelineStageTransferBit,
+		barrier,
+	); err != nil {
 		return fmt.Errorf("vulki: download buffer: %w", err)
 	}
 
@@ -279,6 +324,9 @@ func (b *Buffer) Close() error {
 	defer b.mu.Unlock()
 	if b.closed {
 		return nil
+	}
+	if b.bindings > 0 {
+		return fmt.Errorf("vulki: buffer is used by %d binding sets", b.bindings)
 	}
 	if b.device == nil && b.buffer == 0 && b.memory == 0 {
 		b.closed = true
@@ -391,7 +439,13 @@ func (b *Buffer) closeNative(state *deviceState) {
 	}
 }
 
-func (d *Device) copyBufferAndWait(state *deviceState, source, destination vk.Buffer, sourceOffset, destinationOffset, size uint64) error {
+func (d *Device) copyBufferAndWait(
+	state *deviceState,
+	source, destination vk.Buffer,
+	sourceOffset, destinationOffset, size uint64,
+	sourceStage, destinationStage vk.PipelineStageFlags,
+	barrier vk.BufferMemoryBarrier,
+) error {
 	poolInfo := vk.CommandPoolCreateInfo{
 		SType:            vk.StructureTypeCommandPoolCreateInfo,
 		QueueFamilyIndex: state.queueFamily,
@@ -420,6 +474,13 @@ func (d *Device) copyBufferAndWait(state *deviceState, source, destination vk.Bu
 	if err := state.ops.beginCommandBuffer(state.deviceFns, command, &begin); err != nil {
 		return err
 	}
+	state.ops.bufferBarriers(
+		state.deviceFns,
+		command,
+		sourceStage,
+		destinationStage,
+		[]vk.BufferMemoryBarrier{barrier},
+	)
 	state.ops.copyBuffer(state.deviceFns, command, source, destination, []vk.BufferCopy{{
 		SrcOffset: sourceOffset,
 		DstOffset: destinationOffset,

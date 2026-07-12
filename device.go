@@ -69,6 +69,7 @@ type deviceState struct {
 	queueFamily uint32
 	memory      vk.PhysicalDeviceMemoryProperties
 	ops         deviceOps
+	kernelOps   kernelOps
 }
 
 type deviceChild interface {
@@ -148,7 +149,7 @@ func Open() (*Device, error) {
 }
 
 func openWithHooks(hooks openHooks) (_ *Device, err error) {
-	state := &deviceState{hooks: hooks, ops: directDeviceOps}
+	state := &deviceState{hooks: hooks, ops: directDeviceOps, kernelOps: directKernelOps}
 	complete := false
 	defer func() {
 		if !complete {
