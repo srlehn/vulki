@@ -2,6 +2,7 @@ package vk
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -11,6 +12,17 @@ func TestResultString(t *testing.T) {
 	}
 	if got, want := Result(-999).String(), "VkResult(-999)"; got != want {
 		t.Fatalf("unknown Result.String() = %q, want %q", got, want)
+	}
+}
+
+func TestStatusErrorDoesNotCallTimeoutFailure(t *testing.T) {
+	err := resultError("vkWaitForFences", Timeout)
+	if strings.Contains(err.Error(), "failed") {
+		t.Fatalf("timeout error = %q, must not call a status a failure", err)
+	}
+	var vkErr *Error
+	if !errors.As(err, &vkErr) || vkErr.Result != Timeout {
+		t.Fatalf("timeout error = %v, want inspectable Timeout", err)
 	}
 }
 

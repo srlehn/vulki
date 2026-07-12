@@ -49,7 +49,7 @@ func NewContext() (*Context, error) {
 		ApplicationVersion: 1,
 		PEngineName:        engineName,
 		EngineVersion:      1,
-		ApiVersion:         (1 << 22) | (1 << 12), // Vulkan 1.1
+		APIVersion:         (1 << 22) | (1 << 12), // Vulkan 1.1
 	}
 	createInfo := vk.InstanceCreateInfo{
 		SType:            vk.StructureTypeInstanceCreateInfo,

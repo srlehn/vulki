@@ -105,12 +105,16 @@ func (f *GlobalFuncs) CreateInstance(info *InstanceCreateInfo) (Instance, error)
 	return inst, nil
 }
 
+// DestroyInstance destroys instance with nil allocation callbacks. It is a
+// no-op for a nil function table or null instance.
 func (f *InstanceFuncs) DestroyInstance(instance Instance) {
 	if f != nil && f.destroyInstance != nil && instance != 0 {
 		f.destroyInstance(instance, 0)
 	}
 }
 
+// EnumeratePhysicalDevices returns the physical devices visible to instance.
+// It retries when Vulkan reports Incomplete.
 func (f *InstanceFuncs) EnumeratePhysicalDevices(instance Instance) ([]PhysicalDevice, error) {
 	if f == nil || f.enumeratePhysicalDevices == nil {
 		return nil, fmt.Errorf("vk: instance functions are not loaded")
@@ -147,6 +151,7 @@ func (f *InstanceFuncs) EnumeratePhysicalDevices(instance Instance) ([]PhysicalD
 	}
 }
 
+// GetPhysicalDeviceProperties returns the Vulkan 1.0 properties for device.
 func (f *InstanceFuncs) GetPhysicalDeviceProperties(device PhysicalDevice) PhysicalDeviceProperties {
 	var props PhysicalDeviceProperties
 	if f == nil || f.getPhysicalDeviceProperties == nil || device == 0 {
@@ -156,6 +161,8 @@ func (f *InstanceFuncs) GetPhysicalDeviceProperties(device PhysicalDevice) Physi
 	return props
 }
 
+// GetPhysicalDeviceQueueFamilyProperties returns the queue-family properties
+// reported for device.
 func (f *InstanceFuncs) GetPhysicalDeviceQueueFamilyProperties(device PhysicalDevice) []QueueFamilyProperties {
 	if f == nil || f.getPhysicalDeviceQueueFamilyProps == nil || device == 0 {
 		return nil
@@ -173,6 +180,7 @@ func (f *InstanceFuncs) GetPhysicalDeviceQueueFamilyProperties(device PhysicalDe
 	return props[:count]
 }
 
+// GetPhysicalDeviceMemoryProperties returns the memory properties for device.
 func (f *InstanceFuncs) GetPhysicalDeviceMemoryProperties(device PhysicalDevice) PhysicalDeviceMemoryProperties {
 	var props PhysicalDeviceMemoryProperties
 	if f == nil || f.getPhysicalDeviceMemoryProperties == nil || device == 0 {
@@ -182,6 +190,8 @@ func (f *InstanceFuncs) GetPhysicalDeviceMemoryProperties(device PhysicalDevice)
 	return props
 }
 
+// CreateDevice creates a logical device with nil allocation callbacks. The
+// caller owns the returned device and must destroy it.
 func (f *InstanceFuncs) CreateDevice(physicalDevice PhysicalDevice, info *DeviceCreateInfo) (Device, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkCreateDevice requires create info")
@@ -200,6 +210,8 @@ func (f *InstanceFuncs) CreateDevice(physicalDevice PhysicalDevice, info *Device
 	return dev, nil
 }
 
+// GetDeviceProcAddr resolves a device-level Vulkan function. It returns zero
+// for invalid input or a missing function.
 func (f *InstanceFuncs) GetDeviceProcAddr(device Device, name string) uintptr {
 	if f == nil || f.getDeviceProcAddr == nil || device == 0 || name == "" || strings.IndexByte(name, 0) >= 0 {
 		return 0

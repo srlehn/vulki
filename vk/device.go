@@ -143,12 +143,16 @@ func loadDeviceFuncs(instFuncs *InstanceFuncs, device Device, register func(inte
 
 // --- Wrapper methods ---
 
+// GetDeviceQueue returns a queue owned by device. The queue must not be
+// destroyed separately.
 func (f *DeviceFuncs) GetDeviceQueue(device Device, familyIndex, queueIndex uint32) Queue {
 	var q Queue
 	f.getDeviceQueue(device, familyIndex, queueIndex, &q)
 	return q
 }
 
+// CreateBuffer creates a buffer with nil allocation callbacks. The caller owns
+// the returned buffer and must destroy it before destroying device.
 func (f *DeviceFuncs) CreateBuffer(device Device, info *BufferCreateInfo) (Buffer, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkCreateBuffer requires create info")
@@ -161,16 +165,20 @@ func (f *DeviceFuncs) CreateBuffer(device Device, info *BufferCreateInfo) (Buffe
 	return buf, nil
 }
 
+// DestroyBuffer destroys a buffer created from device.
 func (f *DeviceFuncs) DestroyBuffer(device Device, buffer Buffer) {
 	f.destroyBuffer(device, buffer, 0)
 }
 
+// GetBufferMemoryRequirements returns the memory requirements for buffer.
 func (f *DeviceFuncs) GetBufferMemoryRequirements(device Device, buffer Buffer) MemoryRequirements {
 	var reqs MemoryRequirements
 	f.getBufferMemoryRequirements(device, buffer, &reqs)
 	return reqs
 }
 
+// AllocateMemory allocates device memory with nil allocation callbacks. The
+// caller owns the returned memory and must free it.
 func (f *DeviceFuncs) AllocateMemory(device Device, info *MemoryAllocateInfo) (DeviceMemory, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkAllocateMemory requires allocation info")
@@ -183,10 +191,12 @@ func (f *DeviceFuncs) AllocateMemory(device Device, info *MemoryAllocateInfo) (D
 	return mem, nil
 }
 
+// FreeMemory frees a device-memory allocation.
 func (f *DeviceFuncs) FreeMemory(device Device, memory DeviceMemory) {
 	f.freeMemory(device, memory, 0)
 }
 
+// BindBufferMemory binds memory to buffer at offset.
 func (f *DeviceFuncs) BindBufferMemory(device Device, buffer Buffer, memory DeviceMemory, offset uint64) error {
 	res := f.bindBufferMemory(device, buffer, memory, offset)
 	if res != Success {
@@ -195,6 +205,8 @@ func (f *DeviceFuncs) BindBufferMemory(device Device, buffer Buffer, memory Devi
 	return nil
 }
 
+// MapMemory maps a device-memory range. The returned pointer is borrowed until
+// UnmapMemory is called for the same memory.
 func (f *DeviceFuncs) MapMemory(device Device, memory DeviceMemory, offset, size uint64) (unsafe.Pointer, error) {
 	var ptr unsafe.Pointer
 	res := f.mapMemory(device, memory, offset, size, 0, &ptr)
@@ -204,10 +216,13 @@ func (f *DeviceFuncs) MapMemory(device Device, memory DeviceMemory, offset, size
 	return ptr, nil
 }
 
+// UnmapMemory unmaps a mapped device-memory allocation.
 func (f *DeviceFuncs) UnmapMemory(device Device, memory DeviceMemory) {
 	f.unmapMemory(device, memory)
 }
 
+// CreateShaderModule creates a shader module. The caller owns the returned
+// module and must destroy it.
 func (f *DeviceFuncs) CreateShaderModule(device Device, info *ShaderModuleCreateInfo) (ShaderModule, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkCreateShaderModule requires create info")
@@ -220,10 +235,13 @@ func (f *DeviceFuncs) CreateShaderModule(device Device, info *ShaderModuleCreate
 	return mod, nil
 }
 
+// DestroyShaderModule destroys a shader module created from device.
 func (f *DeviceFuncs) DestroyShaderModule(device Device, module ShaderModule) {
 	f.destroyShaderModule(device, module, 0)
 }
 
+// CreateDescriptorSetLayout creates a descriptor-set layout. The caller owns
+// the returned layout and must destroy it.
 func (f *DeviceFuncs) CreateDescriptorSetLayout(device Device, info *DescriptorSetLayoutCreateInfo) (DescriptorSetLayout, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkCreateDescriptorSetLayout requires create info")
@@ -236,10 +254,13 @@ func (f *DeviceFuncs) CreateDescriptorSetLayout(device Device, info *DescriptorS
 	return layout, nil
 }
 
+// DestroyDescriptorSetLayout destroys a descriptor-set layout.
 func (f *DeviceFuncs) DestroyDescriptorSetLayout(device Device, layout DescriptorSetLayout) {
 	f.destroyDescriptorSetLayout(device, layout, 0)
 }
 
+// CreatePipelineLayout creates a pipeline layout. The caller owns the returned
+// layout and must destroy it.
 func (f *DeviceFuncs) CreatePipelineLayout(device Device, info *PipelineLayoutCreateInfo) (PipelineLayout, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkCreatePipelineLayout requires create info")
@@ -252,6 +273,7 @@ func (f *DeviceFuncs) CreatePipelineLayout(device Device, info *PipelineLayoutCr
 	return layout, nil
 }
 
+// DestroyPipelineLayout destroys a pipeline layout.
 func (f *DeviceFuncs) DestroyPipelineLayout(device Device, layout PipelineLayout) {
 	f.destroyPipelineLayout(device, layout, 0)
 }
@@ -278,10 +300,13 @@ func (f *DeviceFuncs) CreateComputePipelines(device Device, infos []ComputePipel
 	return pipelines, nil
 }
 
+// DestroyPipeline destroys a pipeline created from device.
 func (f *DeviceFuncs) DestroyPipeline(device Device, pipeline Pipeline) {
 	f.destroyPipeline(device, pipeline, 0)
 }
 
+// CreateDescriptorPool creates a descriptor pool. The caller owns the returned
+// pool and must destroy it. Destroying the pool releases its descriptor sets.
 func (f *DeviceFuncs) CreateDescriptorPool(device Device, info *DescriptorPoolCreateInfo) (DescriptorPool, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkCreateDescriptorPool requires create info")
@@ -294,10 +319,13 @@ func (f *DeviceFuncs) CreateDescriptorPool(device Device, info *DescriptorPoolCr
 	return pool, nil
 }
 
+// DestroyDescriptorPool destroys a descriptor pool and releases its sets.
 func (f *DeviceFuncs) DestroyDescriptorPool(device Device, pool DescriptorPool) {
 	f.destroyDescriptorPool(device, pool, 0)
 }
 
+// AllocateDescriptorSets allocates sets owned by info.DescriptorPool. The sets
+// remain valid until that pool is reset or destroyed.
 func (f *DeviceFuncs) AllocateDescriptorSets(device Device, info *DescriptorSetAllocateInfo) ([]DescriptorSet, error) {
 	if info == nil || info.DescriptorSetCount == 0 {
 		return nil, fmt.Errorf("vkAllocateDescriptorSets requires at least one descriptor set")
@@ -319,6 +347,8 @@ func (f *DeviceFuncs) WriteDescriptorSets(device Device, writes []WriteDescripto
 	f.updateDescriptorSets(device, uint32(len(writes)), &writes[0], 0, 0)
 }
 
+// CreateCommandPool creates a command pool. The caller owns the returned pool
+// and must destroy it. Destroying the pool releases its command buffers.
 func (f *DeviceFuncs) CreateCommandPool(device Device, info *CommandPoolCreateInfo) (CommandPool, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkCreateCommandPool requires create info")
@@ -331,10 +361,12 @@ func (f *DeviceFuncs) CreateCommandPool(device Device, info *CommandPoolCreateIn
 	return pool, nil
 }
 
+// DestroyCommandPool destroys a command pool and releases its command buffers.
 func (f *DeviceFuncs) DestroyCommandPool(device Device, pool CommandPool) {
 	f.destroyCommandPool(device, pool, 0)
 }
 
+// AllocateCommandBuffers allocates command buffers owned by info.CommandPool.
 func (f *DeviceFuncs) AllocateCommandBuffers(device Device, info *CommandBufferAllocateInfo) ([]CommandBuffer, error) {
 	if info == nil || info.CommandBufferCount == 0 {
 		return nil, fmt.Errorf("vkAllocateCommandBuffers requires at least one command buffer")
@@ -347,6 +379,7 @@ func (f *DeviceFuncs) AllocateCommandBuffers(device Device, info *CommandBufferA
 	return bufs, nil
 }
 
+// BeginCommandBuffer begins recording commands into cb.
 func (f *DeviceFuncs) BeginCommandBuffer(cb CommandBuffer, info *CommandBufferBeginInfo) error {
 	if info == nil {
 		return fmt.Errorf("vk: vkBeginCommandBuffer requires begin info")
@@ -358,6 +391,7 @@ func (f *DeviceFuncs) BeginCommandBuffer(cb CommandBuffer, info *CommandBufferBe
 	return nil
 }
 
+// EndCommandBuffer ends command recording for cb.
 func (f *DeviceFuncs) EndCommandBuffer(cb CommandBuffer) error {
 	res := f.endCommandBuffer(cb)
 	if res != Success {
@@ -366,10 +400,13 @@ func (f *DeviceFuncs) EndCommandBuffer(cb CommandBuffer) error {
 	return nil
 }
 
+// CmdBindPipeline records a pipeline bind command.
 func (f *DeviceFuncs) CmdBindPipeline(cb CommandBuffer, bindPoint PipelineBindPoint, pipeline Pipeline) {
 	f.cmdBindPipeline(cb, bindPoint, pipeline)
 }
 
+// CmdBindDescriptorSets records descriptor-set binds without dynamic offsets.
+// An empty set slice records no command.
 func (f *DeviceFuncs) CmdBindDescriptorSets(cb CommandBuffer, bindPoint PipelineBindPoint, layout PipelineLayout, firstSet uint32, sets []DescriptorSet) {
 	if len(sets) == 0 {
 		return
@@ -377,10 +414,13 @@ func (f *DeviceFuncs) CmdBindDescriptorSets(cb CommandBuffer, bindPoint Pipeline
 	f.cmdBindDescriptorSets(cb, bindPoint, layout, firstSet, uint32(len(sets)), &sets[0], 0, 0)
 }
 
+// CmdDispatch records a compute dispatch.
 func (f *DeviceFuncs) CmdDispatch(cb CommandBuffer, groupCountX, groupCountY, groupCountZ uint32) {
 	f.cmdDispatch(cb, groupCountX, groupCountY, groupCountZ)
 }
 
+// CmdCopyBuffer records buffer copy regions. An empty region slice records no
+// command.
 func (f *DeviceFuncs) CmdCopyBuffer(cb CommandBuffer, src, dst Buffer, regions []BufferCopy) {
 	if len(regions) == 0 {
 		return
@@ -389,15 +429,16 @@ func (f *DeviceFuncs) CmdCopyBuffer(cb CommandBuffer, src, dst Buffer, regions [
 }
 
 // CmdPipelineBarrierBuffers records buffer memory barriers with no dependency
-// flags, memory barriers, or image barriers.
+// flags, memory barriers, or image barriers. An empty slice records no command.
 func (f *DeviceFuncs) CmdPipelineBarrierBuffers(cb CommandBuffer, srcStage, dstStage PipelineStageFlags, bufBarriers []BufferMemoryBarrier) {
-	var pBuf *BufferMemoryBarrier
-	if len(bufBarriers) > 0 {
-		pBuf = &bufBarriers[0]
+	if len(bufBarriers) == 0 {
+		return
 	}
-	f.cmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, nil, uint32(len(bufBarriers)), pBuf, 0, 0)
+	f.cmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, nil, uint32(len(bufBarriers)), &bufBarriers[0], 0, 0)
 }
 
+// CreateFence creates a fence. The caller owns the returned fence and must
+// destroy it.
 func (f *DeviceFuncs) CreateFence(device Device, info *FenceCreateInfo) (Fence, error) {
 	if info == nil {
 		return 0, fmt.Errorf("vk: vkCreateFence requires create info")
@@ -410,10 +451,13 @@ func (f *DeviceFuncs) CreateFence(device Device, info *FenceCreateInfo) (Fence, 
 	return fence, nil
 }
 
+// DestroyFence destroys a fence created from device.
 func (f *DeviceFuncs) DestroyFence(device Device, fence Fence) {
 	f.destroyFence(device, fence, 0)
 }
 
+// WaitForFences blocks until the requested fence condition is met or timeout
+// expires. A timeout is returned as an inspectable *Error with Result Timeout.
 func (f *DeviceFuncs) WaitForFences(device Device, fences []Fence, waitAll bool, timeout uint64) error {
 	if len(fences) == 0 {
 		return fmt.Errorf("vkWaitForFences requires at least one fence")
@@ -429,6 +473,7 @@ func (f *DeviceFuncs) WaitForFences(device Device, fences []Fence, waitAll bool,
 	return nil
 }
 
+// ResetFences resets one or more fences to the unsignaled state.
 func (f *DeviceFuncs) ResetFences(device Device, fences []Fence) error {
 	if len(fences) == 0 {
 		return fmt.Errorf("vkResetFences requires at least one fence")
@@ -440,6 +485,7 @@ func (f *DeviceFuncs) ResetFences(device Device, fences []Fence) error {
 	return nil
 }
 
+// ResetCommandBuffer resets cb with the supplied Vulkan flags.
 func (f *DeviceFuncs) ResetCommandBuffer(cb CommandBuffer, flags CommandBufferResetFlags) error {
 	res := f.resetCommandBuffer(cb, flags)
 	if res != Success {
@@ -448,6 +494,8 @@ func (f *DeviceFuncs) ResetCommandBuffer(cb CommandBuffer, flags CommandBufferRe
 	return nil
 }
 
+// QueueSubmit submits command batches to queue. An empty slice is forwarded as
+// a zero-count Vulkan submission.
 func (f *DeviceFuncs) QueueSubmit(queue Queue, submits []SubmitInfo, fence Fence) error {
 	if len(submits) == 0 {
 		res := f.queueSubmit(queue, 0, nil, fence)
@@ -463,6 +511,8 @@ func (f *DeviceFuncs) QueueSubmit(queue Queue, submits []SubmitInfo, fence Fence
 	return nil
 }
 
+// FlushMappedMemoryRanges flushes mapped ranges for non-coherent memory. An
+// empty slice is a no-op.
 func (f *DeviceFuncs) FlushMappedMemoryRanges(device Device, ranges []MappedMemoryRange) error {
 	if len(ranges) == 0 {
 		return nil
@@ -474,6 +524,8 @@ func (f *DeviceFuncs) FlushMappedMemoryRanges(device Device, ranges []MappedMemo
 	return nil
 }
 
+// InvalidateMappedMemoryRanges invalidates mapped ranges for non-coherent
+// memory. An empty slice is a no-op.
 func (f *DeviceFuncs) InvalidateMappedMemoryRanges(device Device, ranges []MappedMemoryRange) error {
 	if len(ranges) == 0 {
 		return nil
@@ -485,6 +537,7 @@ func (f *DeviceFuncs) InvalidateMappedMemoryRanges(device Device, ranges []Mappe
 	return nil
 }
 
+// DeviceWaitIdle blocks until all queues belonging to device are idle.
 func (f *DeviceFuncs) DeviceWaitIdle(device Device) error {
 	res := f.deviceWaitIdle(device)
 	if res != Success {
@@ -493,13 +546,37 @@ func (f *DeviceFuncs) DeviceWaitIdle(device Device) error {
 	return nil
 }
 
-func (f *DeviceFuncs) CmdUpdateBuffer(cb CommandBuffer, dst Buffer, offset uint64, data []byte) {
+// CmdUpdateBuffer records a small inline buffer update. Vulkan requires a
+// four-byte-aligned offset and data address, a size divisible by four, and no
+// more than 65536 bytes per update.
+func (f *DeviceFuncs) CmdUpdateBuffer(cb CommandBuffer, dst Buffer, offset uint64, data []byte) error {
 	if len(data) == 0 {
-		return
+		return nil
+	}
+	if f == nil || f.cmdUpdateBuffer == nil {
+		return fmt.Errorf("vk: device functions are not loaded")
+	}
+	if cb == 0 || dst == 0 {
+		return fmt.Errorf("vk: vkCmdUpdateBuffer requires a command buffer and destination buffer")
+	}
+	if offset%4 != 0 {
+		return fmt.Errorf("vk: vkCmdUpdateBuffer offset %d is not divisible by 4", offset)
+	}
+	if len(data)%4 != 0 {
+		return fmt.Errorf("vk: vkCmdUpdateBuffer data size %d is not divisible by 4", len(data))
+	}
+	if len(data) > 65536 {
+		return fmt.Errorf("vk: vkCmdUpdateBuffer data size %d exceeds 65536 bytes", len(data))
+	}
+	if uintptr(unsafe.Pointer(&data[0]))%4 != 0 {
+		return fmt.Errorf("vk: vkCmdUpdateBuffer data address is not four-byte aligned")
 	}
 	f.cmdUpdateBuffer(cb, dst, offset, uint64(len(data)), unsafe.Pointer(&data[0]))
+	return nil
 }
 
+// DestroyDevice destroys device. All child resources must already have been
+// released. It is a no-op for a nil function table or null device.
 func (f *DeviceFuncs) DestroyDevice(device Device) {
 	if f != nil && f.destroyDevice != nil && device != 0 {
 		f.destroyDevice(device, 0)

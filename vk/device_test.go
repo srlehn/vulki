@@ -155,8 +155,52 @@ func TestNarrowSliceWrappersHandleEmptyInput(t *testing.T) {
 	if err := functions.QueueSubmit(Queue(1), nil, Fence(9)); err != nil {
 		t.Fatalf("QueueSubmit: %v", err)
 	}
-	if barrierCalls != 1 || writeCalls != 0 || submitCalls != 1 {
+	if barrierCalls != 0 || writeCalls != 0 || submitCalls != 1 {
 		t.Fatalf("calls = barrier:%d write:%d submit:%d", barrierCalls, writeCalls, submitCalls)
+	}
+}
+
+func TestCmdUpdateBufferValidation(t *testing.T) {
+	calls := 0
+	functions := &DeviceFuncs{cmdUpdateBuffer: func(_ CommandBuffer, _ Buffer, _ uint64, size uint64, _ unsafe.Pointer) {
+		calls++
+		if size != 4 {
+			t.Fatalf("size = %d, want 4", size)
+		}
+	}}
+
+	valid := make([]uint32, 1)
+	validBytes := unsafe.Slice((*byte)(unsafe.Pointer(&valid[0])), 4)
+	tests := []struct {
+		name   string
+		cb     CommandBuffer
+		dst    Buffer
+		offset uint64
+		data   []byte
+	}{
+		{name: "null command buffer", dst: Buffer(1), data: validBytes},
+		{name: "null destination", cb: CommandBuffer(1), data: validBytes},
+		{name: "unaligned offset", cb: CommandBuffer(1), dst: Buffer(1), offset: 2, data: validBytes},
+		{name: "unaligned size", cb: CommandBuffer(1), dst: Buffer(1), data: validBytes[:3]},
+		{name: "oversized", cb: CommandBuffer(1), dst: Buffer(1), data: make([]byte, 65540)},
+		{name: "unaligned address", cb: CommandBuffer(1), dst: Buffer(1), data: make([]byte, 5)[1:]},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := functions.CmdUpdateBuffer(test.cb, test.dst, test.offset, test.data); err == nil {
+				t.Fatal("CmdUpdateBuffer succeeded")
+			}
+		})
+	}
+
+	if err := functions.CmdUpdateBuffer(CommandBuffer(1), Buffer(1), 0, nil); err != nil {
+		t.Fatalf("empty CmdUpdateBuffer: %v", err)
+	}
+	if err := functions.CmdUpdateBuffer(CommandBuffer(1), Buffer(1), 0, validBytes); err != nil {
+		t.Fatalf("valid CmdUpdateBuffer: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("driver calls = %d, want 1", calls)
 	}
 }
 

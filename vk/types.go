@@ -5,7 +5,7 @@ import (
 	"unsafe"
 )
 
-// Handle types - all opaque pointers represented as uintptr.
+// Vulkan handles are represented as uintptr on the supported 64-bit targets.
 type (
 	Instance            uintptr
 	PhysicalDevice      uintptr
@@ -24,7 +24,7 @@ type (
 	Fence               uintptr
 )
 
-// Result codes.
+// Result is a Vulkan result or status code.
 type Result int32
 
 // Bool32 is Vulkan's 32-bit boolean representation.
@@ -108,8 +108,9 @@ func (r Result) String() string {
 	}
 }
 
-// Error reports a failed Vulkan operation and preserves its result code for
-// inspection with errors.As.
+// Error reports a non-success Vulkan result and preserves its code for
+// inspection with errors.As. The result may be a status such as Timeout rather
+// than a driver failure.
 type Error struct {
 	Op     string
 	Result Result
@@ -117,9 +118,9 @@ type Error struct {
 
 func (e *Error) Error() string {
 	if e == nil {
-		return "vk: operation failed"
+		return "vk: operation returned a non-success result"
 	}
-	return fmt.Sprintf("vk: %s failed: %s", e.Op, e.Result)
+	return fmt.Sprintf("vk: %s returned %s", e.Op, e.Result)
 }
 
 func resultError(op string, result Result) error {
@@ -166,7 +167,7 @@ const (
 	BufferUsageStorageBufferBit BufferUsageFlags = 0x00000020
 )
 
-// Memory property flags.
+// MemoryPropertyFlags selects physical-memory properties.
 type MemoryPropertyFlags uint32
 
 const (
@@ -258,11 +259,10 @@ const (
 	PipelineStageHostBit          PipelineStageFlags = 0x00004000
 )
 
-// Whole size sentinel.
+// WholeSize selects the complete remaining size of a Vulkan resource.
 const WholeSize = ^uint64(0)
 
-// ---- Structs matching Vulkan C layout ----
-
+// ApplicationInfo mirrors VkApplicationInfo.
 type ApplicationInfo struct {
 	SType              StructureType
 	PNext              uintptr
@@ -270,20 +270,22 @@ type ApplicationInfo struct {
 	ApplicationVersion uint32
 	PEngineName        *byte
 	EngineVersion      uint32
-	ApiVersion         uint32
+	APIVersion         uint32
 }
 
+// InstanceCreateInfo mirrors VkInstanceCreateInfo.
 type InstanceCreateInfo struct {
 	SType                   StructureType
 	PNext                   uintptr
 	Flags                   uint32
 	PApplicationInfo        *ApplicationInfo
 	EnabledLayerCount       uint32
-	PpEnabledLayerNames     uintptr
+	PPEnabledLayerNames     uintptr
 	EnabledExtensionCount   uint32
-	PpEnabledExtensionNames uintptr
+	PPEnabledExtensionNames uintptr
 }
 
+// DeviceQueueCreateInfo mirrors VkDeviceQueueCreateInfo.
 type DeviceQueueCreateInfo struct {
 	SType            StructureType
 	PNext            uintptr
@@ -293,6 +295,7 @@ type DeviceQueueCreateInfo struct {
 	PQueuePriorities *float32
 }
 
+// DeviceCreateInfo mirrors VkDeviceCreateInfo.
 type DeviceCreateInfo struct {
 	SType                   StructureType
 	PNext                   uintptr
@@ -300,12 +303,13 @@ type DeviceCreateInfo struct {
 	QueueCreateInfoCount    uint32
 	PQueueCreateInfos       *DeviceQueueCreateInfo
 	EnabledLayerCount       uint32
-	PpEnabledLayerNames     uintptr
+	PPEnabledLayerNames     uintptr
 	EnabledExtensionCount   uint32
-	PpEnabledExtensionNames uintptr
+	PPEnabledExtensionNames uintptr
 	PEnabledFeatures        uintptr
 }
 
+// BufferCreateInfo mirrors VkBufferCreateInfo.
 type BufferCreateInfo struct {
 	SType                 StructureType
 	PNext                 uintptr
@@ -317,6 +321,7 @@ type BufferCreateInfo struct {
 	PQueueFamilyIndices   uintptr
 }
 
+// MemoryAllocateInfo mirrors VkMemoryAllocateInfo.
 type MemoryAllocateInfo struct {
 	SType           StructureType
 	PNext           uintptr
@@ -324,6 +329,7 @@ type MemoryAllocateInfo struct {
 	MemoryTypeIndex uint32
 }
 
+// ShaderModuleCreateInfo mirrors VkShaderModuleCreateInfo.
 type ShaderModuleCreateInfo struct {
 	SType    StructureType
 	PNext    uintptr
@@ -332,6 +338,7 @@ type ShaderModuleCreateInfo struct {
 	PCode    unsafe.Pointer
 }
 
+// DescriptorSetLayoutBinding mirrors VkDescriptorSetLayoutBinding.
 type DescriptorSetLayoutBinding struct {
 	Binding            uint32
 	DescriptorType     DescriptorType
@@ -340,6 +347,7 @@ type DescriptorSetLayoutBinding struct {
 	PImmutableSamplers uintptr
 }
 
+// DescriptorSetLayoutCreateInfo mirrors VkDescriptorSetLayoutCreateInfo.
 type DescriptorSetLayoutCreateInfo struct {
 	SType        StructureType
 	PNext        uintptr
@@ -348,6 +356,7 @@ type DescriptorSetLayoutCreateInfo struct {
 	PBindings    *DescriptorSetLayoutBinding
 }
 
+// PipelineLayoutCreateInfo mirrors VkPipelineLayoutCreateInfo.
 type PipelineLayoutCreateInfo struct {
 	SType                  StructureType
 	PNext                  uintptr
@@ -358,6 +367,7 @@ type PipelineLayoutCreateInfo struct {
 	PPushConstantRanges    uintptr
 }
 
+// SpecializationInfo mirrors VkSpecializationInfo.
 type SpecializationInfo struct {
 	MapEntryCount uint32
 	PMapEntries   uintptr
@@ -365,6 +375,7 @@ type SpecializationInfo struct {
 	PData         uintptr
 }
 
+// PipelineShaderStageCreateInfo mirrors VkPipelineShaderStageCreateInfo.
 type PipelineShaderStageCreateInfo struct {
 	SType               StructureType
 	PNext               uintptr
@@ -375,6 +386,7 @@ type PipelineShaderStageCreateInfo struct {
 	PSpecializationInfo *SpecializationInfo
 }
 
+// ComputePipelineCreateInfo mirrors VkComputePipelineCreateInfo.
 type ComputePipelineCreateInfo struct {
 	SType              StructureType
 	PNext              uintptr
@@ -385,11 +397,13 @@ type ComputePipelineCreateInfo struct {
 	BasePipelineIndex  int32
 }
 
+// DescriptorPoolSize mirrors VkDescriptorPoolSize.
 type DescriptorPoolSize struct {
 	Type            DescriptorType
 	DescriptorCount uint32
 }
 
+// DescriptorPoolCreateInfo mirrors VkDescriptorPoolCreateInfo.
 type DescriptorPoolCreateInfo struct {
 	SType         StructureType
 	PNext         uintptr
@@ -399,6 +413,7 @@ type DescriptorPoolCreateInfo struct {
 	PPoolSizes    *DescriptorPoolSize
 }
 
+// DescriptorSetAllocateInfo mirrors VkDescriptorSetAllocateInfo.
 type DescriptorSetAllocateInfo struct {
 	SType              StructureType
 	PNext              uintptr
@@ -407,12 +422,14 @@ type DescriptorSetAllocateInfo struct {
 	PSetLayouts        *DescriptorSetLayout
 }
 
+// DescriptorBufferInfo mirrors VkDescriptorBufferInfo.
 type DescriptorBufferInfo struct {
 	Buffer Buffer
 	Offset uint64
 	Range  uint64
 }
 
+// WriteDescriptorSet mirrors VkWriteDescriptorSet.
 type WriteDescriptorSet struct {
 	SType            StructureType
 	PNext            uintptr
@@ -426,6 +443,7 @@ type WriteDescriptorSet struct {
 	PTexelBufferView uintptr
 }
 
+// CommandPoolCreateInfo mirrors VkCommandPoolCreateInfo.
 type CommandPoolCreateInfo struct {
 	SType            StructureType
 	PNext            uintptr
@@ -433,6 +451,7 @@ type CommandPoolCreateInfo struct {
 	QueueFamilyIndex uint32
 }
 
+// CommandBufferAllocateInfo mirrors VkCommandBufferAllocateInfo.
 type CommandBufferAllocateInfo struct {
 	SType              StructureType
 	PNext              uintptr
@@ -441,6 +460,7 @@ type CommandBufferAllocateInfo struct {
 	CommandBufferCount uint32
 }
 
+// CommandBufferBeginInfo mirrors VkCommandBufferBeginInfo.
 type CommandBufferBeginInfo struct {
 	SType            StructureType
 	PNext            uintptr
@@ -448,6 +468,7 @@ type CommandBufferBeginInfo struct {
 	PInheritanceInfo uintptr
 }
 
+// SubmitInfo mirrors VkSubmitInfo.
 type SubmitInfo struct {
 	SType                StructureType
 	PNext                uintptr
@@ -460,31 +481,40 @@ type SubmitInfo struct {
 	PSignalSemaphores    uintptr
 }
 
+// FenceCreateInfo mirrors VkFenceCreateInfo.
 type FenceCreateInfo struct {
 	SType StructureType
 	PNext uintptr
 	Flags uint32
 }
 
+// MemoryRequirements mirrors VkMemoryRequirements.
 type MemoryRequirements struct {
 	Size           uint64
 	Alignment      uint64
 	MemoryTypeBits uint32
 }
 
+// MemoryType mirrors VkMemoryType.
 type MemoryType struct {
 	PropertyFlags MemoryPropertyFlags
 	HeapIndex     uint32
 }
 
+// MemoryHeap mirrors VkMemoryHeap.
 type MemoryHeap struct {
 	Size  uint64
 	Flags uint32
 }
 
-const MaxMemoryTypes = 32
-const MaxMemoryHeaps = 16
+const (
+	// MaxMemoryTypes is Vulkan's maximum number of physical-device memory types.
+	MaxMemoryTypes = 32
+	// MaxMemoryHeaps is Vulkan's maximum number of physical-device memory heaps.
+	MaxMemoryHeaps = 16
+)
 
+// PhysicalDeviceMemoryProperties mirrors VkPhysicalDeviceMemoryProperties.
 type PhysicalDeviceMemoryProperties struct {
 	MemoryTypeCount uint32
 	MemoryTypes     [MaxMemoryTypes]MemoryType
@@ -492,6 +522,7 @@ type PhysicalDeviceMemoryProperties struct {
 	MemoryHeaps     [MaxMemoryHeaps]MemoryHeap
 }
 
+// MappedMemoryRange mirrors VkMappedMemoryRange.
 type MappedMemoryRange struct {
 	SType  StructureType
 	PNext  uintptr
@@ -500,6 +531,7 @@ type MappedMemoryRange struct {
 	Size   uint64
 }
 
+// BufferMemoryBarrier mirrors VkBufferMemoryBarrier.
 type BufferMemoryBarrier struct {
 	SType               StructureType
 	PNext               uintptr
@@ -512,6 +544,7 @@ type BufferMemoryBarrier struct {
 	Size                uint64
 }
 
+// MemoryBarrier mirrors VkMemoryBarrier.
 type MemoryBarrier struct {
 	SType         StructureType
 	PNext         uintptr
@@ -519,12 +552,14 @@ type MemoryBarrier struct {
 	DstAccessMask AccessFlags
 }
 
+// BufferCopy mirrors VkBufferCopy.
 type BufferCopy struct {
 	SrcOffset uint64
 	DstOffset uint64
 	Size      uint64
 }
 
+// QueueFamilyProperties mirrors VkQueueFamilyProperties.
 type QueueFamilyProperties struct {
 	QueueFlags                  QueueFlags
 	QueueCount                  uint32
@@ -532,8 +567,6 @@ type QueueFamilyProperties struct {
 	MinImageTransferGranularity [3]uint32
 }
 
-// physicalDeviceLimits preserves VkPhysicalDeviceLimits size and alignment.
-// The high-level package exposes only the portable limits it uses.
 // PhysicalDeviceLimits reports implementation-dependent Vulkan limits.
 type PhysicalDeviceLimits struct {
 	MaxImageDimension1D                             uint32
