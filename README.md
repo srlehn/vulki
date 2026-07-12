@@ -26,6 +26,9 @@ When you find any errors please report them as issues.
 
 Vulkan is optional for image registration. The automatic correlator prefers the
 GPU and falls back to the CPU implementation when Vulkan is unavailable.
+The GPU path stages each packed input once, keeps every intermediate on the
+device, and includes both uploads and the 64-byte result readback in one Vulkan
+queue submission.
 
 The Linux loader path is tested. Library lookup exists for Windows but is not
 yet verified. macOS portability-instance handling is not implemented, so macOS

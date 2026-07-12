@@ -424,6 +424,11 @@ func TestPeakFind_KnownLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer result.Destroy(ctx)
+	scratch, err := compute.NewTypedBuffer[[2]float32](ctx, int(peakWorkgroups), usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scratch.Destroy(ctx)
 	params, err := ctx.CreateBuffer(32, usage)
 	if err != nil {
 		t.Fatal(err)
@@ -439,7 +444,10 @@ func TestPeakFind_KnownLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	pipe := compilePipeline(t, ctx, peakFindWGSL, []compute.BufferBinding{
-		bb(0, input.Buf), bb(1, result.Buf), bb(2, params),
+		bb(0, input.Buf), bb(1, scratch.Buf), bb(2, params),
+	})
+	reducePipe := compilePipeline(t, ctx, peakReduceWGSL, []compute.BufferBinding{
+		bb(0, scratch.Buf), bb(1, result.Buf),
 	})
 	finalizePipe := compilePipeline(t, ctx, peakFinalizeWGSL, []compute.BufferBinding{
 		bb(0, input.Buf), bb(1, result.Buf), bb(2, params),
@@ -450,8 +458,11 @@ func TestPeakFind_KnownLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec.Bind(pipe)
+	rec.Dispatch(peakWorkgroups, 1, 1)
+	rec.Barrier(scratch.Buf.DeviceBuffer)
+	rec.Bind(reducePipe)
 	rec.Dispatch(1, 1, 1)
-	rec.Barrier(result.Buf.DeviceBuffer)
+	rec.Barrier(scratch.Buf.DeviceBuffer, result.Buf.DeviceBuffer)
 	rec.Bind(finalizePipe)
 	rec.Dispatch(1, 1, 1)
 	if err := rec.Submit(); err != nil {
@@ -840,7 +851,11 @@ func TestPhaseCorrelateGPU_KnownTransform(t *testing.T) {
 	if corr.Backend() != BackendGPU {
 		t.Fatalf("backend = %q, want %q", corr.Backend(), BackendGPU)
 	}
+	before := corr.ctx.SubmissionCount()
 	assertKnownTransform(t, corr, imgA)
+	if got := corr.ctx.SubmissionCount() - before; got != 1 {
+		t.Fatalf("PhaseCorrelate queue submissions = %d, want 1", got)
+	}
 }
 
 func assertKnownTransform(t *testing.T, corr *Correlator, imgA *image.RGBA) {

@@ -35,6 +35,7 @@ func TestShadersPassSPIRVValidation(t *testing.T) {
 		"magnitude":          magnitudeWGSL,
 		"peak_finalize":      peakFinalizeWGSL,
 		"peak_find":          peakFindWGSL,
+		"peak_reduce":        peakReduceWGSL,
 	}
 
 	for name, source := range shaders {

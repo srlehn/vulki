@@ -3,6 +3,7 @@ package compute
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/srlehn/vulki/vk"
@@ -21,6 +22,7 @@ type Context struct {
 	MemProps    vk.PhysicalDeviceMemoryProperties
 
 	queueMu sync.Mutex
+	submits atomic.Uint64
 }
 
 // NewContext creates a Vulkan instance, selects a physical device with a compute
@@ -181,5 +183,16 @@ func (c *Context) submitAndWait(submits []vk.SubmitInfo, fence vk.Fence) error {
 	if err := c.DevFuncs.QueueSubmit(c.Queue, submits, fence); err != nil {
 		return err
 	}
+	c.submits.Add(1)
 	return c.DevFuncs.WaitForFences(c.Device, []vk.Fence{fence}, true, ^uint64(0))
+}
+
+// SubmissionCount returns the number of successful high-level queue
+// submissions made through this context. It is intended for diagnostics and
+// regression tests.
+func (c *Context) SubmissionCount() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.submits.Load()
 }

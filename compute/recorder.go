@@ -1,6 +1,10 @@
 package compute
 
-import "github.com/srlehn/vulki/vk"
+import (
+	"fmt"
+
+	"github.com/srlehn/vulki/vk"
+)
 
 // CommandRecorder batches multiple dispatches, barriers, and buffer updates
 // into a single command buffer for efficient GPU submission.
@@ -9,6 +13,7 @@ type CommandRecorder struct {
 	pool    vk.CommandPool
 	cb      vk.CommandBuffer
 	curPipe *Pipeline
+	closed  bool
 }
 
 // NewCommandRecorder allocates a command pool and command buffer, and begins recording.
@@ -64,7 +69,7 @@ func (r *CommandRecorder) Barrier(bufs ...vk.Buffer) {
 	for i, b := range bufs {
 		barriers[i] = vk.BufferMemoryBarrier{
 			SType:               vk.StructureTypeBufferMemoryBarrier,
-			SrcAccessMask:       vk.AccessShaderWriteBit,
+			SrcAccessMask:       vk.AccessShaderReadBit | vk.AccessShaderWriteBit,
 			DstAccessMask:       vk.AccessShaderReadBit | vk.AccessShaderWriteBit,
 			SrcQueueFamilyIndex: ^uint32(0),
 			DstQueueFamilyIndex: ^uint32(0),
@@ -83,7 +88,7 @@ func (r *CommandRecorder) BarrierTransferToCompute(bufs ...vk.Buffer) {
 		barriers[i] = vk.BufferMemoryBarrier{
 			SType:               vk.StructureTypeBufferMemoryBarrier,
 			SrcAccessMask:       vk.AccessTransferWriteBit,
-			DstAccessMask:       vk.AccessShaderReadBit,
+			DstAccessMask:       vk.AccessShaderReadBit | vk.AccessShaderWriteBit,
 			SrcQueueFamilyIndex: ^uint32(0),
 			DstQueueFamilyIndex: ^uint32(0),
 			Buffer:              b,
@@ -117,17 +122,63 @@ func (r *CommandRecorder) UpdateBuffer(buf vk.Buffer, offset uint64, data []byte
 	r.ctx.DevFuncs.CmdUpdateBuffer(r.cb, buf, offset, data)
 }
 
+// CopyToDevice records a staged host upload and makes it visible to compute
+// shaders in the same command buffer.
+func (r *CommandRecorder) CopyToDevice(buf *Buffer, size uint64) error {
+	if r == nil || r.closed || buf == nil || size > buf.size {
+		return fmt.Errorf("compute: invalid recorded upload")
+	}
+	if size == 0 {
+		return nil
+	}
+	r.ctx.DevFuncs.CmdCopyBuffer(r.cb, buf.StagingBuffer, buf.DeviceBuffer, []vk.BufferCopy{{Size: size}})
+	r.BarrierTransferToCompute(buf.DeviceBuffer)
+	return nil
+}
+
+// CopyToStaging records a device-to-staging transfer after prior compute
+// shader writes have completed.
+func (r *CommandRecorder) CopyToStaging(buf *Buffer, size uint64) error {
+	if r == nil || r.closed || buf == nil || size > buf.size {
+		return fmt.Errorf("compute: invalid recorded download")
+	}
+	if size == 0 {
+		return nil
+	}
+	barrier := vk.BufferMemoryBarrier{
+		SType:               vk.StructureTypeBufferMemoryBarrier,
+		SrcAccessMask:       vk.AccessShaderWriteBit,
+		DstAccessMask:       vk.AccessTransferReadBit,
+		SrcQueueFamilyIndex: ^uint32(0),
+		DstQueueFamilyIndex: ^uint32(0),
+		Buffer:              buf.DeviceBuffer,
+		Offset:              0,
+		Size:                size,
+	}
+	r.ctx.DevFuncs.CmdPipelineBarrier(
+		r.cb,
+		vk.PipelineStageComputeShaderBit,
+		vk.PipelineStageTransferBit,
+		[]vk.BufferMemoryBarrier{barrier},
+	)
+	r.ctx.DevFuncs.CmdCopyBuffer(r.cb, buf.DeviceBuffer, buf.StagingBuffer, []vk.BufferCopy{{Size: size}})
+	return nil
+}
+
 // Submit ends recording, submits the command buffer, waits for completion, and cleans up.
 func (r *CommandRecorder) Submit() error {
+	if r == nil || r.closed {
+		return fmt.Errorf("compute: command recorder is closed")
+	}
 	if err := r.ctx.DevFuncs.EndCommandBuffer(r.cb); err != nil {
-		r.ctx.DevFuncs.DestroyCommandPool(r.ctx.Device, r.pool)
+		r.Abort()
 		return err
 	}
 
 	fenceInfo := vk.FenceCreateInfo{SType: vk.StructureTypeFenceCreateInfo}
 	fence, err := r.ctx.DevFuncs.CreateFence(r.ctx.Device, &fenceInfo)
 	if err != nil {
-		r.ctx.DevFuncs.DestroyCommandPool(r.ctx.Device, r.pool)
+		r.Abort()
 		return err
 	}
 
@@ -139,6 +190,18 @@ func (r *CommandRecorder) Submit() error {
 	err = r.ctx.submitAndWait([]vk.SubmitInfo{submitInfo}, fence)
 
 	r.ctx.DevFuncs.DestroyFence(r.ctx.Device, fence)
-	r.ctx.DevFuncs.DestroyCommandPool(r.ctx.Device, r.pool)
+	r.Abort()
 	return err
+}
+
+// Abort releases a recorder without submitting it.
+func (r *CommandRecorder) Abort() {
+	if r == nil || r.closed {
+		return
+	}
+	r.closed = true
+	if r.pool != 0 {
+		r.ctx.DevFuncs.DestroyCommandPool(r.ctx.Device, r.pool)
+		r.pool = 0
+	}
 }

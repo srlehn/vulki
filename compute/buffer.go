@@ -104,6 +104,19 @@ func (c *Context) CreateBuffer(size uint64, extraUsage uint32) (*Buffer, error) 
 
 // Upload copies data from the host to the device-local buffer via the staging buffer.
 func (b *Buffer) Upload(ctx *Context, data []byte) error {
+	if err := b.StageUpload(ctx, data); err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	return ctx.copyBuffer(b.StagingBuffer, b.DeviceBuffer, uint64(len(data)))
+}
+
+// StageUpload copies host data into staging memory without submitting a queue
+// operation. A CommandRecorder can include the staging-to-device copy in a
+// larger submission.
+func (b *Buffer) StageUpload(ctx *Context, data []byte) error {
 	if b == nil || ctx == nil {
 		return fmt.Errorf("compute: invalid buffer upload")
 	}
@@ -122,9 +135,7 @@ func (b *Buffer) Upload(ctx *Context, data []byte) error {
 	dst := unsafe.Slice((*byte)(ptr), len(data))
 	copy(dst, data)
 	ctx.DevFuncs.UnmapMemory(ctx.Device, b.StagingMemory)
-
-	// Record and submit a copy command.
-	return ctx.copyBuffer(b.StagingBuffer, b.DeviceBuffer, uint64(len(data)))
+	return nil
 }
 
 // Download copies data from the device-local buffer to the host via the staging buffer.
@@ -144,7 +155,22 @@ func (b *Buffer) Download(ctx *Context, size uint64) ([]byte, error) {
 		return nil, err
 	}
 
-	// Map staging and read out.
+	return b.ReadStaged(ctx, size)
+}
+
+// ReadStaged copies data from staging memory after a recorded device-to-staging
+// transfer has completed.
+func (b *Buffer) ReadStaged(ctx *Context, size uint64) ([]byte, error) {
+	if b == nil || ctx == nil {
+		return nil, fmt.Errorf("compute: invalid staged buffer read")
+	}
+	if size > b.size {
+		return nil, fmt.Errorf("compute: staged read size %d exceeds buffer size %d", size, b.size)
+	}
+	if size == 0 {
+		return []byte{}, nil
+	}
+
 	ptr, err := ctx.DevFuncs.MapMemory(ctx.Device, b.StagingMemory, 0, size)
 	if err != nil {
 		return nil, err

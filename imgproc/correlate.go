@@ -22,6 +22,9 @@ var bilinearWarpGrayWGSL string
 //go:embed shaders/peak_find.wgsl
 var peakFindWGSL string
 
+//go:embed shaders/peak_reduce.wgsl
+var peakReduceWGSL string
+
 //go:embed shaders/peak_finalize.wgsl
 var peakFinalizeWGSL string
 
@@ -64,6 +67,8 @@ const minimumMatchConfidence = 0.03
 
 const maxExactFloat32Index = 1 << 24
 
+const peakWorkgroups uint32 = 64
+
 // Correlator performs log-polar phase correlation on a GPU or CPU backend.
 type Correlator struct {
 	ctx *compute.Context
@@ -84,6 +89,7 @@ type Correlator struct {
 	spirvGrayPad    []byte
 	spirvWarpGray   []byte
 	spirvPeakFind   []byte
+	spirvPeakReduce []byte
 	spirvPeakFinal  []byte
 	spirvBitrev     []byte
 	spirvButterfly  []byte
@@ -99,6 +105,7 @@ type Correlator struct {
 	magA, magB         *compute.TypedBuffer[float32]    // padSize x padSize
 	logPolA, logPolB   *compute.TypedBuffer[[2]float32] // lpW x lpH
 	crossPow           *compute.TypedBuffer[[2]float32] // max(n, lpN)
+	peakScratch        *compute.TypedBuffer[[2]float32] // one maximum per peak-scan workgroup
 	result             *compute.TypedBuffer[float32]    // 16 floats = 64 bytes
 	params             *compute.Buffer                  // shared small params buffer
 
@@ -117,6 +124,7 @@ type Correlator struct {
 	pipeCrosspowerLP                   *compute.Pipeline
 	pipeCrosspowerTrans                *compute.Pipeline
 	pipePeakFind                       *compute.Pipeline
+	pipePeakReduce                     *compute.Pipeline
 	pipePeakFinal                      *compute.Pipeline
 
 	allPipelines []*compute.Pipeline
@@ -170,6 +178,7 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		{&c.spirvGrayPad, grayscalePadWGSL, "grayscale_pad"},
 		{&c.spirvWarpGray, bilinearWarpGrayWGSL, "bilinear_warp_gray"},
 		{&c.spirvPeakFind, peakFindWGSL, "peak_find"},
+		{&c.spirvPeakReduce, peakReduceWGSL, "peak_reduce"},
 		{&c.spirvPeakFinal, peakFinalizeWGSL, "peak_finalize"},
 		{&c.spirvBitrev, fftBitrevWGSL, "fft_bitrev"},
 		{&c.spirvButterfly, fftButterflyWGSL, "fft_butterfly"},
@@ -237,6 +246,12 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 
 	// Cross-power buffer.
 	c.crossPow, err = compute.NewTypedBuffer[[2]float32](ctx, max(n, lpN), usage)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+
+	c.peakScratch, err = compute.NewTypedBuffer[[2]float32](ctx, int(peakWorkgroups), usage)
 	if err != nil {
 		c.Close()
 		return nil, err
@@ -442,9 +457,15 @@ func (c *Correlator) createPipelines() error {
 		return err
 	}
 
-	// PeakFind: binding 0=input(complex), 1=result(f32), 2=params
+	// Peak scan: binding 0=input(complex), 1=per-workgroup scratch, 2=params.
 	c.pipePeakFind, err = mk(c.spirvPeakFind, []compute.BufferBinding{
-		bb(0, c.crossPow.Buf), bb(1, c.result.Buf), bb(2, paramBuf),
+		bb(0, c.crossPow.Buf), bb(1, c.peakScratch.Buf), bb(2, paramBuf),
+	})
+	if err != nil {
+		return err
+	}
+	c.pipePeakReduce, err = mk(c.spirvPeakReduce, []compute.BufferBinding{
+		bb(0, c.peakScratch.Buf), bb(1, c.result.Buf),
 	})
 	if err != nil {
 		return err
@@ -508,8 +529,8 @@ func packRGBA(img *image.RGBA) ([]uint32, error) {
 //	Phase 2: transform image A by detected angle/scale, phase correlate with B for translation
 //	         Try both angle and angle+180° (magnitude spectrum has 180° symmetry), pick higher peak.
 //
-// Uploads packed RGBA pixels once per image, runs the entire pipeline on GPU,
-// downloads only 64 bytes of results.
+// Stages packed RGBA pixels once per image, then submits both uploads, the
+// entire GPU pipeline, and a 64-byte result readback as one queue operation.
 func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	if c == nil || c.closed {
 		return nil, fmt.Errorf("imgproc: invalid correlator")
@@ -561,18 +582,25 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	padSize := uint32(c.w)
 	cropU32 := uint32(cropSize)
 
-	// ---- Upload tightly packed RGBA pixels (once) ----
-	if err := c.rgbaA.UploadSlice(c.ctx, pixelsA); err != nil {
-		return nil, fmt.Errorf("imgproc: upload imgA: %w", err)
+	// ---- Stage tightly packed RGBA pixels once per image ----
+	if err := c.rgbaA.StageUploadSlice(c.ctx, pixelsA); err != nil {
+		return nil, fmt.Errorf("imgproc: stage imgA: %w", err)
 	}
-	if err := c.rgbaB.UploadSlice(c.ctx, pixelsB); err != nil {
-		return nil, fmt.Errorf("imgproc: upload imgB: %w", err)
+	if err := c.rgbaB.StageUploadSlice(c.ctx, pixelsB); err != nil {
+		return nil, fmt.Errorf("imgproc: stage imgB: %w", err)
 	}
 
-	// ---- Single command buffer for entire pipeline ----
+	// ---- Single command buffer for uploads, compute, and readback ----
 	rec, err := c.ctx.NewCommandRecorder()
 	if err != nil {
 		return nil, err
+	}
+	defer rec.Abort()
+	if err := rec.CopyToDevice(c.rgbaA.Buf, uint64(len(pixelsA))*4); err != nil {
+		return nil, fmt.Errorf("imgproc: record imgA upload: %w", err)
+	}
+	if err := rec.CopyToDevice(c.rgbaB.Buf, uint64(len(pixelsB))*4); err != nil {
+		return nil, fmt.Errorf("imgproc: record imgB upload: %w", err)
 	}
 
 	// ==== Phase 1: Rotation & Scale (per Reddy & Chatterji §III) ====
@@ -670,8 +698,11 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.UpdateBuffer(paramsBuf, 0, peakLPParams)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipePeakFind)
+	rec.Dispatch(peakWorkgroups, 1, 1)
+	rec.Barrier(c.peakScratch.Buf.DeviceBuffer)
+	rec.Bind(c.pipePeakReduce)
 	rec.Dispatch(1, 1, 1)
-	rec.Barrier(c.result.Buf.DeviceBuffer)
+	rec.Barrier(c.peakScratch.Buf.DeviceBuffer, c.result.Buf.DeviceBuffer)
 	rec.Bind(c.pipePeakFinal)
 	rec.Dispatch(1, 1, 1)
 	rec.Barrier(c.result.Buf.DeviceBuffer)
@@ -713,8 +744,11 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.UpdateBuffer(paramsBuf, 0, peakT1Params)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipePeakFind)
+	rec.Dispatch(peakWorkgroups, 1, 1)
+	rec.Barrier(c.peakScratch.Buf.DeviceBuffer)
+	rec.Bind(c.pipePeakReduce)
 	rec.Dispatch(1, 1, 1)
-	rec.Barrier(c.result.Buf.DeviceBuffer)
+	rec.Barrier(c.peakScratch.Buf.DeviceBuffer, c.result.Buf.DeviceBuffer)
 	rec.Bind(c.pipePeakFinal)
 	rec.Dispatch(1, 1, 1)
 	rec.Barrier(c.result.Buf.DeviceBuffer)
@@ -753,19 +787,24 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.UpdateBuffer(paramsBuf, 0, peakT2Params)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipePeakFind)
+	rec.Dispatch(peakWorkgroups, 1, 1)
+	rec.Barrier(c.peakScratch.Buf.DeviceBuffer)
+	rec.Bind(c.pipePeakReduce)
 	rec.Dispatch(1, 1, 1)
-	rec.Barrier(c.result.Buf.DeviceBuffer)
+	rec.Barrier(c.peakScratch.Buf.DeviceBuffer, c.result.Buf.DeviceBuffer)
 	rec.Bind(c.pipePeakFinal)
 	rec.Dispatch(1, 1, 1)
-	rec.Barrier(c.result.Buf.DeviceBuffer)
+	if err := rec.CopyToStaging(c.result.Buf, c.result.Buf.Size()); err != nil {
+		return nil, fmt.Errorf("imgproc: record result readback: %w", err)
+	}
 
-	// ==== Submit entire pipeline ====
+	// ==== Submit uploads, pipeline, and readback together ====
 	if err := rec.Submit(); err != nil {
 		return nil, fmt.Errorf("imgproc: GPU pipeline: %w", err)
 	}
 
-	// ---- Download 64 bytes of results ----
-	res, err := c.result.DownloadSlice(c.ctx)
+	// ---- Read the 64 bytes copied to staging by the completed submission ----
+	res, err := c.result.ReadStagedSlice(c.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("imgproc: download results: %w", err)
 	}
@@ -857,6 +896,9 @@ func (c *Correlator) Close() {
 	}
 	if c.crossPow != nil {
 		c.crossPow.Destroy(c.ctx)
+	}
+	if c.peakScratch != nil {
+		c.peakScratch.Destroy(c.ctx)
 	}
 	if c.result != nil {
 		c.result.Destroy(c.ctx)
