@@ -25,7 +25,7 @@ func main() {
 func run() error {
 	// 1. Compile WGSL → SPIR-V.
 	fmt.Println("Compiling WGSL shader...")
-	spirv, err := shader.Compile(wgslSource, nil)
+	spirv, err := shader.Compile(wgslSource)
 	if err != nil {
 		return fmt.Errorf("shader compile: %w", err)
 	}

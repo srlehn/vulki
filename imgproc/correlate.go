@@ -188,7 +188,7 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		{&c.spirvLogpolar, logpolarWGSL, "logpolar"},
 		{&c.spirvCrosspower, crosspowerWGSL, "crosspower"},
 	} {
-		*entry.dst, err = shader.Compile(entry.src, nil)
+		*entry.dst, err = shader.Compile(entry.src)
 		if err != nil {
 			return nil, fmt.Errorf("imgproc: compile %s: %w", entry.name, err)
 		}

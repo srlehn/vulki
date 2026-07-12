@@ -40,7 +40,7 @@ func TestShadersPassSPIRVValidation(t *testing.T) {
 
 	for name, source := range shaders {
 		t.Run(name, func(t *testing.T) {
-			spirv, err := shader.Compile(source, nil)
+			spirv, err := shader.Compile(source)
 			if err != nil {
 				t.Fatalf("compile WGSL: %v", err)
 			}

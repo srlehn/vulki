@@ -29,7 +29,7 @@ func testContext(t *testing.T) *compute.Context {
 // compilePipeline compiles a WGSL shader and creates a pipeline.
 func compilePipeline(t *testing.T, ctx *compute.Context, wgsl string, bindings []compute.BufferBinding) *compute.Pipeline {
 	t.Helper()
-	spirv, err := shader.Compile(wgsl, nil)
+	spirv, err := shader.Compile(wgsl)
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}

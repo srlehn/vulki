@@ -46,7 +46,7 @@ func TestFftshift(t *testing.T) {
 	}
 	defer paramsBuf.Destroy(ctx)
 
-	spirv, err := shader.Compile(fftshiftWGSL, nil)
+	spirv, err := shader.Compile(fftshiftWGSL)
 	if err != nil {
 		t.Fatal(err)
 	}
