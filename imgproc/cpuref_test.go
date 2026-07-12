@@ -10,7 +10,11 @@ import (
 
 func TestPhaseCorrelateCPU_KnownTransform(t *testing.T) {
 	imgA := loadTestImage(t, "../testdata/snake.png")
-	corr, err := NewCPUCorrelator(imgA.Bounds().Dx(), imgA.Bounds().Dy())
+	corr, err := NewCorrelator(
+		imgA.Bounds().Dx(),
+		imgA.Bounds().Dy(),
+		WithBackend(BackendCPU),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +27,7 @@ func TestPhaseCorrelateCPU_KnownTransform(t *testing.T) {
 
 func TestPhaseCorrelateCPU_RejectsBlankImages(t *testing.T) {
 	const size = 64
-	corr, err := NewCPUCorrelator(size, size)
+	corr, err := NewCorrelator(size, size, WithBackend(BackendCPU))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +57,25 @@ func TestAutoCorrelatorFallsBackToCPU(t *testing.T) {
 	}
 }
 
-func TestNewBackendCorrelatorRejectsUnknownBackend(t *testing.T) {
-	if _, err := NewBackendCorrelator(Backend("invalid"), 64, 64); err == nil {
+func TestNewCorrelatorRejectsUnknownBackend(t *testing.T) {
+	if _, err := NewCorrelator(64, 64, WithBackend(Backend("invalid"))); err == nil {
 		t.Fatal("unknown backend was accepted")
+	}
+}
+
+func TestNewCorrelatorRejectsNilOption(t *testing.T) {
+	if _, err := NewCorrelator(64, 64, nil); err == nil {
+		t.Fatal("nil option was accepted")
+	}
+}
+
+func TestNewCorrelatorRejectsDuplicateBackend(t *testing.T) {
+	if _, err := NewCorrelator(
+		64,
+		64,
+		WithBackend(BackendCPU),
+		WithBackend(BackendCPU),
+	); err == nil {
+		t.Fatal("duplicate backend option was accepted")
 	}
 }

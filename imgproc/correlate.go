@@ -130,8 +130,7 @@ type Correlator struct {
 	allPipelines []*compute.Pipeline
 }
 
-// NewCorrelator creates a GPU Correlator using a caller-owned Vulkan context.
-func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
+func newVulkanCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 	if ctx == nil || ctx.DevFuncs == nil || ctx.Device == 0 {
 		return nil, fmt.Errorf("imgproc: invalid compute context")
 	}
@@ -149,7 +148,7 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		return nil, fmt.Errorf("imgproc: maximum image area exceeds shader indexing limits")
 	}
 
-	c := &Correlator{ctx: ctx, backend: BackendGPU, maxW: maxW, maxH: maxH}
+	c := &Correlator{ctx: ctx, backend: BackendVulkan, maxW: maxW, maxH: maxH}
 
 	// Square crop + minimal padding: crop to min(w,h) then pad to next power of 2.
 	// This preserves spectral symmetry and avoids excessive zero-padding.
@@ -538,7 +537,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	if c.backend == BackendCPU {
 		return c.phaseCorrelateCPU(imgA, imgB)
 	}
-	if c.backend != BackendGPU || c.ctx == nil {
+	if c.backend != BackendVulkan || c.ctx == nil {
 		return nil, fmt.Errorf("imgproc: invalid correlator backend")
 	}
 	if imgA == nil || imgB == nil {

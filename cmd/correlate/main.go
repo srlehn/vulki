@@ -26,7 +26,7 @@ func main() {
 
 func run() error {
 	save := flag.Bool("save", false, "save stacked comparison image (self-test mode)")
-	backend := flag.String("backend", string(imgproc.BackendAuto), "registration backend: auto, gpu, or cpu")
+	backend := flag.String("backend", string(imgproc.BackendAuto), "registration backend: auto, vulkan, or cpu")
 	flag.Parse()
 	args := flag.Args()
 
@@ -36,7 +36,7 @@ func run() error {
 	case 2:
 		return runCorrelate(args[0], args[1], imgproc.Backend(*backend))
 	default:
-		return fmt.Errorf("usage: correlate [-save] [-backend auto|gpu|cpu] <image.png> [imageB.png]")
+		return fmt.Errorf("usage: correlate [-save] [-backend auto|vulkan|cpu] <image.png> [imageB.png]")
 	}
 }
 
@@ -57,7 +57,7 @@ func runCorrelate(pathA, pathB string, backend imgproc.Backend) error {
 
 	fmt.Printf("Image A: %dx%d, Image B: %dx%d\n", boundsA.Dx(), boundsA.Dy(), boundsB.Dx(), boundsB.Dy())
 	fmt.Println("Creating correlator...")
-	corr, err := imgproc.NewBackendCorrelator(backend, maxW, maxH)
+	corr, err := imgproc.NewCorrelator(maxW, maxH, imgproc.WithBackend(backend))
 	if err != nil {
 		return fmt.Errorf("create correlator: %w", err)
 	}
@@ -137,7 +137,7 @@ func runSelfTest(path string, save bool, backend imgproc.Backend) error {
 	maxH := max(h, imgB.Bounds().Dy())
 
 	fmt.Println("Creating correlator...")
-	corr, err := imgproc.NewBackendCorrelator(backend, maxW, maxH)
+	corr, err := imgproc.NewCorrelator(maxW, maxH, imgproc.WithBackend(backend))
 	if err != nil {
 		return fmt.Errorf("create correlator: %w", err)
 	}

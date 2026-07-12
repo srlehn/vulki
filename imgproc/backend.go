@@ -12,44 +12,84 @@ type Backend string
 const (
 	// BackendAuto prefers Vulkan and falls back to the CPU implementation.
 	BackendAuto Backend = "auto"
-	// BackendGPU requires a Vulkan compute backend.
-	BackendGPU Backend = "gpu"
+	// BackendVulkan requires the direct Vulkan implementation.
+	BackendVulkan Backend = "vulkan"
 	// BackendCPU uses the CPU implementation without probing Vulkan.
 	BackendCPU Backend = "cpu"
 )
 
-// NewBackendCorrelator creates a correlator using the requested backend.
-func NewBackendCorrelator(backend Backend, maxW, maxH int) (*Correlator, error) {
-	switch backend {
-	case BackendAuto:
-		return NewAutoCorrelator(maxW, maxH)
-	case BackendGPU:
-		return NewGPUCorrelator(maxW, maxH)
-	case BackendCPU:
-		return NewCPUCorrelator(maxW, maxH)
-	default:
-		return nil, fmt.Errorf("imgproc: unknown backend %q", backend)
-	}
+// Option configures NewCorrelator. Options are applied before any CPU or
+// Vulkan resources are allocated.
+type Option interface {
+	apply(*correlatorConfig) error
 }
 
-// NewAutoCorrelator prefers Vulkan and falls back to the CPU implementation
-// when Vulkan initialization or GPU correlator creation fails.
-func NewAutoCorrelator(maxW, maxH int) (*Correlator, error) {
-	return newAutoCorrelator(maxW, maxH, compute.NewContext)
+type optionFunc func(*correlatorConfig) error
+
+func (option optionFunc) apply(config *correlatorConfig) error {
+	return option(config)
+}
+
+type correlatorConfig struct {
+	backend    Backend
+	backendSet bool
+}
+
+// WithBackend selects automatic fallback, direct Vulkan, or CPU execution.
+// It may be supplied at most once.
+func WithBackend(backend Backend) Option {
+	return optionFunc(func(config *correlatorConfig) error {
+		if config.backendSet {
+			return fmt.Errorf("imgproc: backend option is already set")
+		}
+		switch backend {
+		case BackendAuto, BackendVulkan, BackendCPU:
+		default:
+			return fmt.Errorf("imgproc: unknown backend %q", backend)
+		}
+		config.backend = backend
+		config.backendSet = true
+		return nil
+	})
+}
+
+// NewCorrelator creates a correlator. With no options it prefers direct Vulkan
+// and falls back to CPU if Vulkan initialization or resource creation fails.
+func NewCorrelator(maxW, maxH int, options ...Option) (*Correlator, error) {
+	config := correlatorConfig{backend: BackendAuto}
+	for index, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("imgproc: option %d is nil", index)
+		}
+		if err := option.apply(&config); err != nil {
+			return nil, fmt.Errorf("imgproc: option %d: %w", index, err)
+		}
+	}
+
+	switch config.backend {
+	case BackendAuto:
+		return newAutoCorrelator(maxW, maxH, compute.NewContext)
+	case BackendVulkan:
+		return newOwnedVulkanCorrelator(maxW, maxH)
+	case BackendCPU:
+		return newCPUCorrelator(maxW, maxH)
+	default:
+		return nil, fmt.Errorf("imgproc: unknown backend %q", config.backend)
+	}
 }
 
 func newAutoCorrelator(
 	maxW, maxH int,
 	newContext func() (*compute.Context, error),
 ) (*Correlator, error) {
-	cpu, err := NewCPUCorrelator(maxW, maxH)
+	cpu, err := newCPUCorrelator(maxW, maxH)
 	if err != nil {
 		return nil, err
 	}
 
 	ctx, gpuErr := newContext()
 	if gpuErr == nil {
-		gpu, err := NewCorrelator(ctx, maxW, maxH)
+		gpu, err := newVulkanCorrelator(ctx, maxW, maxH)
 		if err == nil {
 			gpu.ownsContext = true
 			return gpu, nil
@@ -62,13 +102,12 @@ func newAutoCorrelator(
 	return cpu, nil
 }
 
-// NewGPUCorrelator creates and owns a Vulkan context for a GPU correlator.
-func NewGPUCorrelator(maxW, maxH int) (*Correlator, error) {
+func newOwnedVulkanCorrelator(maxW, maxH int) (*Correlator, error) {
 	ctx, err := compute.NewContext()
 	if err != nil {
 		return nil, err
 	}
-	c, err := NewCorrelator(ctx, maxW, maxH)
+	c, err := newVulkanCorrelator(ctx, maxW, maxH)
 	if err != nil {
 		ctx.Close()
 		return nil, err

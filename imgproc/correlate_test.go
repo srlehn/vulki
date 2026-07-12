@@ -807,7 +807,7 @@ func TestPhase1_RotationDetection(t *testing.T) {
 	if fixture := os.Getenv("VULKI_ROTATION_FIXTURE"); fixture != "" {
 		imgB = loadTestImage(t, fixture)
 	}
-	corr, err := NewCorrelator(ctx, imgA.Bounds().Dx(), imgA.Bounds().Dy())
+	corr, err := newVulkanCorrelator(ctx, imgA.Bounds().Dx(), imgA.Bounds().Dy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -843,13 +843,17 @@ func TestPhase1_RotationDetection(t *testing.T) {
 
 func TestPhaseCorrelateGPU_KnownTransform(t *testing.T) {
 	imgA := loadTestImage(t, "../testdata/snake.png")
-	corr, err := NewGPUCorrelator(imgA.Bounds().Dx(), imgA.Bounds().Dy())
+	corr, err := NewCorrelator(
+		imgA.Bounds().Dx(),
+		imgA.Bounds().Dy(),
+		WithBackend(BackendVulkan),
+	)
 	if err != nil {
 		t.Skipf("no Vulkan GPU backend: %v", err)
 	}
 	defer corr.Close()
-	if corr.Backend() != BackendGPU {
-		t.Fatalf("backend = %q, want %q", corr.Backend(), BackendGPU)
+	if corr.Backend() != BackendVulkan {
+		t.Fatalf("backend = %q, want %q", corr.Backend(), BackendVulkan)
 	}
 	before := corr.ctx.SubmissionCount()
 	assertKnownTransform(t, corr, imgA)

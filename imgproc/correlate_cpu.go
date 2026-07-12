@@ -7,8 +7,7 @@ import (
 	"math/cmplx"
 )
 
-// NewCPUCorrelator creates a correlator that does not require Vulkan.
-func NewCPUCorrelator(maxW, maxH int) (*Correlator, error) {
+func newCPUCorrelator(maxW, maxH int) (*Correlator, error) {
 	if maxW < 2 || maxH < 2 {
 		return nil, fmt.Errorf("imgproc: maximum dimensions must both be at least 2 pixels")
 	}
