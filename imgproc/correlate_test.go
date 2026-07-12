@@ -830,22 +830,28 @@ func TestPhase1_RotationDetection(t *testing.T) {
 	}
 }
 
-func TestPhaseCorrelate_KnownTransform(t *testing.T) {
-	ctx := testContext(t)
+func TestPhaseCorrelateGPU_KnownTransform(t *testing.T) {
+	imgA := loadTestImage(t, "../testdata/snake.png")
+	corr, err := NewGPUCorrelator(imgA.Bounds().Dx(), imgA.Bounds().Dy())
+	if err != nil {
+		t.Skipf("no Vulkan GPU backend: %v", err)
+	}
+	defer corr.Close()
+	if corr.Backend() != BackendGPU {
+		t.Fatalf("backend = %q, want %q", corr.Backend(), BackendGPU)
+	}
+	assertKnownTransform(t, corr, imgA)
+}
 
+func assertKnownTransform(t *testing.T, corr *Correlator, imgA *image.RGBA) {
+	t.Helper()
 	const (
 		wantAngle = 12.0
 		wantScale = 1.15
 		wantTx    = 15
 		wantTy    = -20
 	)
-	imgA := loadTestImage(t, "../testdata/snake.png")
 	imgB := translateImageForTest(BilinearWarp(imgA, -wantAngle, wantScale), wantTx, wantTy)
-	corr, err := NewCorrelator(ctx, imgA.Bounds().Dx(), imgA.Bounds().Dy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer corr.Close()
 
 	result, err := corr.PhaseCorrelate(imgA, imgB)
 	if err != nil {

@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/srlehn/vulki/compute"
 	"github.com/srlehn/vulki/imgproc"
 )
 
@@ -27,20 +26,21 @@ func main() {
 
 func run() error {
 	save := flag.Bool("save", false, "save stacked comparison image (self-test mode)")
+	backend := flag.String("backend", string(imgproc.BackendAuto), "registration backend: auto, gpu, or cpu")
 	flag.Parse()
 	args := flag.Args()
 
 	switch len(args) {
 	case 1:
-		return runSelfTest(args[0], *save)
+		return runSelfTest(args[0], *save, imgproc.Backend(*backend))
 	case 2:
-		return runCorrelate(args[0], args[1])
+		return runCorrelate(args[0], args[1], imgproc.Backend(*backend))
 	default:
-		return fmt.Errorf("usage: correlate [-save] <image.png> [imageB.png]")
+		return fmt.Errorf("usage: correlate [-save] [-backend auto|gpu|cpu] <image.png> [imageB.png]")
 	}
 }
 
-func runCorrelate(pathA, pathB string) error {
+func runCorrelate(pathA, pathB string, backend imgproc.Backend) error {
 	imgA, err := loadRGBA(pathA)
 	if err != nil {
 		return fmt.Errorf("load %s: %w", pathA, err)
@@ -50,13 +50,6 @@ func runCorrelate(pathA, pathB string) error {
 		return fmt.Errorf("load %s: %w", pathB, err)
 	}
 
-	fmt.Println("Creating Vulkan compute context...")
-	ctx, err := compute.NewContext()
-	if err != nil {
-		return fmt.Errorf("compute context: %w", err)
-	}
-	defer ctx.Close()
-
 	boundsA := imgA.Bounds()
 	boundsB := imgB.Bounds()
 	maxW := max(boundsA.Dx(), boundsB.Dx())
@@ -64,11 +57,12 @@ func runCorrelate(pathA, pathB string) error {
 
 	fmt.Printf("Image A: %dx%d, Image B: %dx%d\n", boundsA.Dx(), boundsA.Dy(), boundsB.Dx(), boundsB.Dy())
 	fmt.Println("Creating correlator...")
-	corr, err := imgproc.NewCorrelator(ctx, maxW, maxH)
+	corr, err := imgproc.NewBackendCorrelator(backend, maxW, maxH)
 	if err != nil {
 		return fmt.Errorf("create correlator: %w", err)
 	}
 	defer corr.Close()
+	printBackend(corr)
 
 	fmt.Println("Running phase correlation...")
 	result, err := corr.PhaseCorrelate(imgA, imgB)
@@ -87,7 +81,7 @@ func runCorrelate(pathA, pathB string) error {
 	return nil
 }
 
-func runSelfTest(path string, save bool) error {
+func runSelfTest(path string, save bool, backend imgproc.Backend) error {
 	imgA, err := loadRGBA(path)
 	if err != nil {
 		return fmt.Errorf("load %s: %w", path, err)
@@ -139,21 +133,16 @@ func runSelfTest(path string, save bool) error {
 	}
 
 	// Run correlator.
-	fmt.Println("Creating Vulkan compute context...")
-	ctx, err := compute.NewContext()
-	if err != nil {
-		return fmt.Errorf("compute context: %w", err)
-	}
-	defer ctx.Close()
-
 	maxW := max(w, imgB.Bounds().Dx())
 	maxH := max(h, imgB.Bounds().Dy())
 
-	corr, err := imgproc.NewCorrelator(ctx, maxW, maxH)
+	fmt.Println("Creating correlator...")
+	corr, err := imgproc.NewBackendCorrelator(backend, maxW, maxH)
 	if err != nil {
 		return fmt.Errorf("create correlator: %w", err)
 	}
 	defer corr.Close()
+	printBackend(corr)
 
 	fmt.Println("Running phase correlation...")
 	t0 := time.Now()
@@ -229,6 +218,14 @@ func runSelfTest(path string, save bool) error {
 	}
 
 	return nil
+}
+
+func printBackend(corr *imgproc.Correlator) {
+	if reason := corr.FallbackReason(); reason != nil {
+		fmt.Printf("Backend: %s (GPU unavailable: %v)\n", corr.Backend(), reason)
+		return
+	}
+	fmt.Printf("Backend: %s\n", corr.Backend())
 }
 
 func fmtf(f float64) string {

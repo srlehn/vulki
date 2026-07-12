@@ -64,9 +64,14 @@ const minimumMatchConfidence = 0.03
 
 const maxExactFloat32Index = 1 << 24
 
-// Correlator performs log-polar phase correlation on the GPU.
+// Correlator performs log-polar phase correlation on a GPU or CPU backend.
 type Correlator struct {
 	ctx *compute.Context
+
+	backend        Backend
+	ownsContext    bool
+	fallbackReason error
+	closed         bool
 
 	// Padded image dimensions (power of 2).
 	w, h int
@@ -117,7 +122,7 @@ type Correlator struct {
 	allPipelines []*compute.Pipeline
 }
 
-// NewCorrelator creates a Correlator for images up to maxW x maxH pixels.
+// NewCorrelator creates a GPU Correlator using a caller-owned Vulkan context.
 func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 	if ctx == nil || ctx.DevFuncs == nil || ctx.Device == 0 {
 		return nil, fmt.Errorf("imgproc: invalid compute context")
@@ -136,7 +141,7 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		return nil, fmt.Errorf("imgproc: maximum image area exceeds shader indexing limits")
 	}
 
-	c := &Correlator{ctx: ctx, maxW: maxW, maxH: maxH}
+	c := &Correlator{ctx: ctx, backend: BackendGPU, maxW: maxW, maxH: maxH}
 
 	// Square crop + minimal padding: crop to min(w,h) then pad to next power of 2.
 	// This preserves spectral symmetry and avoids excessive zero-padding.
@@ -506,8 +511,14 @@ func packRGBA(img *image.RGBA) ([]uint32, error) {
 // Uploads packed RGBA pixels once per image, runs the entire pipeline on GPU,
 // downloads only 64 bytes of results.
 func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
-	if c == nil || c.ctx == nil {
+	if c == nil || c.closed {
 		return nil, fmt.Errorf("imgproc: invalid correlator")
+	}
+	if c.backend == BackendCPU {
+		return c.phaseCorrelateCPU(imgA, imgB)
+	}
+	if c.backend != BackendGPU || c.ctx == nil {
+		return nil, fmt.Errorf("imgproc: invalid correlator backend")
 	}
 	if imgA == nil || imgB == nil {
 		return nil, fmt.Errorf("imgproc: input images must not be nil")
@@ -809,6 +820,14 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 
 // Close releases all GPU resources.
 func (c *Correlator) Close() {
+	if c == nil || c.closed {
+		return
+	}
+	c.closed = true
+	if c.backend == BackendCPU {
+		return
+	}
+
 	for _, p := range c.allPipelines {
 		p.Destroy(c.ctx)
 	}
@@ -844,6 +863,10 @@ func (c *Correlator) Close() {
 	}
 	if c.params != nil {
 		c.params.Destroy(c.ctx)
+	}
+	if c.ownsContext && c.ctx != nil {
+		c.ctx.Close()
+		c.ctx = nil
 	}
 }
 

@@ -21,9 +21,11 @@ When you find any errors please report them as issues.
 
 - Go 1.26 or newer.
 - A 64-bit target.
-- A Vulkan 1.1 loader.
-- A Vulkan device and driver exposing a compute queue.
+- A Vulkan 1.1 loader and compute-capable device for GPU acceleration.
 - ImageMagick's `convert` command only for the registration CLI self-test.
+
+Vulkan is optional for image registration. The automatic correlator prefers the
+GPU and falls back to the CPU implementation when Vulkan is unavailable.
 
 The Linux loader path is tested. Library lookup exists for Windows but is not
 yet verified. macOS portability-instance handling is not implemented, so macOS
@@ -96,6 +98,13 @@ Estimate the transform between two PNG images:
 go run ./cmd/correlate image-a.png image-b.png
 ```
 
+The command uses `-backend auto` by default. Use `-backend gpu` to require
+Vulkan or `-backend cpu` to bypass Vulkan explicitly:
+
+```sh
+go run ./cmd/correlate -backend cpu image-a.png image-b.png
+```
+
 The two input images must have the same pixel dimensions. Inputs with different
 dimensions are rejected until the higher-resolution-image semantics from the
 reference algorithm are implemented explicitly.
@@ -114,6 +123,11 @@ go run ./cmd/correlate -save image.png
 The registration command is a research tool. Its reported transform should be
 checked against known inputs before relying on it.
 
+Library users can obtain the same GPU-first behavior with
+`imgproc.NewAutoCorrelator`. `NewGPUCorrelator` and `NewCPUCorrelator` select a
+backend explicitly. `Correlator.Backend` reports the backend actually in use,
+and `FallbackReason` explains an automatic CPU selection.
+
 ## Development
 
 ```sh
@@ -121,8 +135,8 @@ go test ./...
 go vet ./...
 ```
 
-Tests that need a Vulkan compute device skip when no suitable loader, driver,
-or device is available. A machine with Vulkan is required for full validation.
+CPU registration tests run on every platform. GPU tests skip when no suitable
+Vulkan loader, driver, or device is available.
 When `spirv-val` is installed, the image-processing shader test also validates
 every generated module against the Vulkan 1.1 SPIR-V rules.
 
