@@ -159,3 +159,47 @@ func TestNarrowSliceWrappersHandleEmptyInput(t *testing.T) {
 		t.Fatalf("calls = barrier:%d write:%d submit:%d", barrierCalls, writeCalls, submitCalls)
 	}
 }
+
+func TestLoadDeviceFuncsFailureOwnershipMatrix(t *testing.T) {
+	for failureIndex := 0; ; failureIndex++ {
+		lookupIndex := 0
+		destroyed := false
+		instanceFunctions := &InstanceFuncs{
+			getDeviceProcAddr: func(Device, *byte) uintptr {
+				current := lookupIndex
+				lookupIndex++
+				if current == failureIndex {
+					return 0
+				}
+				return 1
+			},
+		}
+
+		functions, err := loadDeviceFuncs(instanceFunctions, Device(1), func(target interface{}, _ uintptr) {
+			if destroy, ok := target.(*func(Device, uintptr)); ok {
+				*destroy = func(Device, uintptr) { destroyed = true }
+			}
+		})
+		if functions != nil {
+			functions.DestroyDevice(Device(1))
+			if !destroyed {
+				t.Fatalf("failure at resolution index %d returned an unusable cleanup table", failureIndex)
+			}
+		}
+		if err == nil {
+			if functions == nil {
+				t.Fatal("successful load returned nil functions")
+			}
+			if failureIndex != lookupIndex {
+				t.Fatalf("resolved %d functions after %d failure cases", lookupIndex, failureIndex)
+			}
+			break
+		}
+		if failureIndex == 0 && functions != nil {
+			t.Fatal("missing vkDestroyDevice returned a cleanup table")
+		}
+		if failureIndex > 0 && functions == nil {
+			t.Fatalf("failure at resolution index %d returned no cleanup table", failureIndex)
+		}
+	}
+}

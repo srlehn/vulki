@@ -57,6 +57,10 @@ type DeviceFuncs struct {
 // resolution fails after vkDestroyDevice was loaded, it returns a non-nil table
 // with the error so the caller can destroy its device.
 func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, error) {
+	return loadDeviceFuncs(instFuncs, device, purego.RegisterFunc)
+}
+
+func loadDeviceFuncs(instFuncs *InstanceFuncs, device Device, register func(interface{}, uintptr)) (*DeviceFuncs, error) {
 	if instFuncs == nil || instFuncs.getDeviceProcAddr == nil {
 		return nil, fmt.Errorf("vk: instance functions are not loaded")
 	}
@@ -70,7 +74,7 @@ func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, err
 		if addr == 0 {
 			return fmt.Errorf("vk: device function %s not found", name)
 		}
-		purego.RegisterFunc(target, addr)
+		register(target, addr)
 		return nil
 	}
 

@@ -41,6 +41,10 @@ func LoadGlobalFuncs(l *Loader) (*GlobalFuncs, error) {
 // after vkDestroyInstance was loaded, it returns a non-nil table with the error
 // so the caller can destroy its instance.
 func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
+	return loadInstanceFuncs(l, instance, purego.RegisterFunc)
+}
+
+func loadInstanceFuncs(l *Loader, instance Instance, register func(interface{}, uintptr)) (*InstanceFuncs, error) {
 	if l == nil {
 		return nil, fmt.Errorf("vk: nil loader")
 	}
@@ -54,7 +58,7 @@ func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 		if addr == 0 {
 			return fmt.Errorf("vk: %s not found", name)
 		}
-		purego.RegisterFunc(target, addr)
+		register(target, addr)
 		return nil
 	}
 
