@@ -65,6 +65,9 @@ func NewContext() (*Context, error) {
 	// Load all instance functions with the real instance handle.
 	instFuncs, err := vk.LoadInstanceFuncs(loader, instance)
 	if err != nil {
+		if instFuncs != nil {
+			instFuncs.DestroyInstance(instance)
+		}
 		loader.Close()
 		return nil, err
 	}
@@ -129,6 +132,9 @@ func NewContext() (*Context, error) {
 
 	devFuncs, err := vk.LoadDeviceFuncs(instFuncs, device)
 	if err != nil {
+		if devFuncs != nil {
+			devFuncs.DestroyDevice(device)
+		}
 		instFuncs.DestroyInstance(instance)
 		loader.Close()
 		return nil, err

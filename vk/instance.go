@@ -6,9 +6,13 @@ import (
 	"github.com/ebitengine/purego"
 )
 
+// GlobalFuncs holds Vulkan functions available without an instance.
+type GlobalFuncs struct {
+	createInstance func(pCreateInfo *InstanceCreateInfo, pAllocator uintptr, pInstance *Instance) Result
+}
+
 // InstanceFuncs holds instance-level Vulkan function pointers.
 type InstanceFuncs struct {
-	createInstance                    func(pCreateInfo *InstanceCreateInfo, pAllocator uintptr, pInstance *Instance) Result
 	destroyInstance                   func(instance Instance, pAllocator uintptr)
 	enumeratePhysicalDevices          func(instance Instance, pCount *uint32, pDevices *PhysicalDevice) Result
 	getPhysicalDeviceProperties       func(device PhysicalDevice, pProperties *PhysicalDeviceProperties)
@@ -18,9 +22,12 @@ type InstanceFuncs struct {
 	getDeviceProcAddr                 func(device Device, pName *byte) uintptr
 }
 
-// LoadGlobalFuncs resolves only vkCreateInstance (available without an instance).
-func LoadGlobalFuncs(l *Loader) (*InstanceFuncs, error) {
-	f := &InstanceFuncs{}
+// LoadGlobalFuncs resolves functions available without a Vulkan instance.
+func LoadGlobalFuncs(l *Loader) (*GlobalFuncs, error) {
+	if l == nil {
+		return nil, fmt.Errorf("vk: nil loader")
+	}
+	f := &GlobalFuncs{}
 	addr := l.GetInstanceProcAddr(0, "vkCreateInstance")
 	if addr == 0 {
 		return nil, fmt.Errorf("vk: vkCreateInstance not found")
@@ -29,8 +36,16 @@ func LoadGlobalFuncs(l *Loader) (*InstanceFuncs, error) {
 	return f, nil
 }
 
-// LoadInstanceFuncs resolves all instance-level functions using a real instance handle.
+// LoadInstanceFuncs resolves instance-level functions. If resolution fails
+// after vkDestroyInstance was loaded, it returns a non-nil table with the error
+// so the caller can destroy its instance.
 func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
+	if l == nil {
+		return nil, fmt.Errorf("vk: nil loader")
+	}
+	if instance == 0 {
+		return nil, fmt.Errorf("vk: null instance")
+	}
 	f := &InstanceFuncs{}
 
 	resolve := func(target interface{}, name string) error {
@@ -42,8 +57,8 @@ func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 		return nil
 	}
 
-	// Resolve destruction first so a later resolution failure can release the
-	// instance that the caller has already created.
+	// Resolve destruction first so the caller can release its instance after a
+	// later resolution failure.
 	if err := resolve(&f.destroyInstance, "vkDestroyInstance"); err != nil {
 		return nil, err
 	}
@@ -52,7 +67,6 @@ func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 		target interface{}
 		name   string
 	}{
-		{&f.createInstance, "vkCreateInstance"},
 		{&f.enumeratePhysicalDevices, "vkEnumeratePhysicalDevices"},
 		{&f.getPhysicalDeviceProperties, "vkGetPhysicalDeviceProperties"},
 		{&f.getPhysicalDeviceQueueFamilyProps, "vkGetPhysicalDeviceQueueFamilyProperties"},
@@ -63,19 +77,25 @@ func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 
 	for _, e := range entries {
 		if err := resolve(e.target, e.name); err != nil {
-			f.destroyInstance(instance, 0)
-			return nil, err
+			return f, err
 		}
 	}
 
 	return f, nil
 }
 
-func (f *InstanceFuncs) CreateInstance(info *InstanceCreateInfo) (Instance, error) {
+// CreateInstance creates a Vulkan instance with nil allocation callbacks.
+func (f *GlobalFuncs) CreateInstance(info *InstanceCreateInfo) (Instance, error) {
+	if f == nil || f.createInstance == nil {
+		return 0, fmt.Errorf("vk: global functions are not loaded")
+	}
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateInstance requires create info")
+	}
 	var inst Instance
 	res := f.createInstance(info, 0, &inst)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreateInstance failed: %d", res)
+		return 0, resultError("vkCreateInstance", res)
 	}
 	return inst, nil
 }
@@ -87,20 +107,33 @@ func (f *InstanceFuncs) DestroyInstance(instance Instance) {
 }
 
 func (f *InstanceFuncs) EnumeratePhysicalDevices(instance Instance) ([]PhysicalDevice, error) {
-	var count uint32
-	res := f.enumeratePhysicalDevices(instance, &count, nil)
-	if res != Success {
-		return nil, fmt.Errorf("vkEnumeratePhysicalDevices (count) failed: %d", res)
+	for {
+		var count uint32
+		res := f.enumeratePhysicalDevices(instance, &count, nil)
+		if res != Success && res != Incomplete {
+			return nil, resultError("vkEnumeratePhysicalDevices", res)
+		}
+		if count == 0 {
+			return nil, nil
+		}
+
+		devices := make([]PhysicalDevice, count)
+		res = f.enumeratePhysicalDevices(instance, &count, &devices[0])
+		switch res {
+		case Success:
+			if count > uint32(len(devices)) {
+				return nil, fmt.Errorf(
+					"vk: vkEnumeratePhysicalDevices returned count %d above capacity %d",
+					count, len(devices),
+				)
+			}
+			return devices[:count], nil
+		case Incomplete:
+			continue
+		default:
+			return nil, resultError("vkEnumeratePhysicalDevices", res)
+		}
 	}
-	if count == 0 {
-		return nil, nil
-	}
-	devices := make([]PhysicalDevice, count)
-	res = f.enumeratePhysicalDevices(instance, &count, &devices[0])
-	if res != Success {
-		return nil, fmt.Errorf("vkEnumeratePhysicalDevices failed: %d", res)
-	}
-	return devices[:count], nil
 }
 
 func (f *InstanceFuncs) GetPhysicalDeviceProperties(device PhysicalDevice) PhysicalDeviceProperties {
@@ -130,7 +163,7 @@ func (f *InstanceFuncs) CreateDevice(physicalDevice PhysicalDevice, info *Device
 	var dev Device
 	res := f.createDevice(physicalDevice, info, 0, &dev)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreateDevice failed: %d", res)
+		return 0, resultError("vkCreateDevice", res)
 	}
 	return dev, nil
 }

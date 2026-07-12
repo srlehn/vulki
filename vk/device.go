@@ -53,8 +53,16 @@ type DeviceFuncs struct {
 	destroyDevice                func(device Device, pAllocator uintptr)
 }
 
-// LoadDeviceFuncs resolves device-level functions via vkGetDeviceProcAddr.
+// LoadDeviceFuncs resolves device-level functions via vkGetDeviceProcAddr. If
+// resolution fails after vkDestroyDevice was loaded, it returns a non-nil table
+// with the error so the caller can destroy its device.
 func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, error) {
+	if instFuncs == nil || instFuncs.getDeviceProcAddr == nil {
+		return nil, fmt.Errorf("vk: instance functions are not loaded")
+	}
+	if device == 0 {
+		return nil, fmt.Errorf("vk: null device")
+	}
 	f := &DeviceFuncs{}
 
 	resolve := func(target interface{}, name string) error {
@@ -70,8 +78,8 @@ func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, err
 		target interface{}
 		name   string
 	}
-	// Resolve destruction first so a later resolution failure can release the
-	// logical device that the caller has already created.
+	// Resolve destruction first so the caller can release its device after a
+	// later resolution failure.
 	if err := resolve(&f.destroyDevice, "vkDestroyDevice"); err != nil {
 		return nil, err
 	}
@@ -122,8 +130,7 @@ func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, err
 
 	for _, e := range entries {
 		if err := resolve(e.target, e.name); err != nil {
-			f.destroyDevice(device, 0)
-			return nil, err
+			return f, err
 		}
 	}
 
@@ -142,7 +149,7 @@ func (f *DeviceFuncs) CreateBuffer(device Device, info *BufferCreateInfo) (Buffe
 	var buf Buffer
 	res := f.createBuffer(device, info, 0, &buf)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreateBuffer failed: %d", res)
+		return 0, resultError("vkCreateBuffer", res)
 	}
 	return buf, nil
 }
@@ -161,7 +168,7 @@ func (f *DeviceFuncs) AllocateMemory(device Device, info *MemoryAllocateInfo) (D
 	var mem DeviceMemory
 	res := f.allocateMemory(device, info, 0, &mem)
 	if res != Success {
-		return 0, fmt.Errorf("vkAllocateMemory failed: %d", res)
+		return 0, resultError("vkAllocateMemory", res)
 	}
 	return mem, nil
 }
@@ -173,7 +180,7 @@ func (f *DeviceFuncs) FreeMemory(device Device, memory DeviceMemory) {
 func (f *DeviceFuncs) BindBufferMemory(device Device, buffer Buffer, memory DeviceMemory, offset uint64) error {
 	res := f.bindBufferMemory(device, buffer, memory, offset)
 	if res != Success {
-		return fmt.Errorf("vkBindBufferMemory failed: %d", res)
+		return resultError("vkBindBufferMemory", res)
 	}
 	return nil
 }
@@ -182,7 +189,7 @@ func (f *DeviceFuncs) MapMemory(device Device, memory DeviceMemory, offset, size
 	var ptr unsafe.Pointer
 	res := f.mapMemory(device, memory, offset, size, 0, &ptr)
 	if res != Success {
-		return nil, fmt.Errorf("vkMapMemory failed: %d", res)
+		return nil, resultError("vkMapMemory", res)
 	}
 	return ptr, nil
 }
@@ -195,7 +202,7 @@ func (f *DeviceFuncs) CreateShaderModule(device Device, info *ShaderModuleCreate
 	var mod ShaderModule
 	res := f.createShaderModule(device, info, 0, &mod)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreateShaderModule failed: %d", res)
+		return 0, resultError("vkCreateShaderModule", res)
 	}
 	return mod, nil
 }
@@ -208,7 +215,7 @@ func (f *DeviceFuncs) CreateDescriptorSetLayout(device Device, info *DescriptorS
 	var layout DescriptorSetLayout
 	res := f.createDescriptorSetLayout(device, info, 0, &layout)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreateDescriptorSetLayout failed: %d", res)
+		return 0, resultError("vkCreateDescriptorSetLayout", res)
 	}
 	return layout, nil
 }
@@ -221,7 +228,7 @@ func (f *DeviceFuncs) CreatePipelineLayout(device Device, info *PipelineLayoutCr
 	var layout PipelineLayout
 	res := f.createPipelineLayout(device, info, 0, &layout)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreatePipelineLayout failed: %d", res)
+		return 0, resultError("vkCreatePipelineLayout", res)
 	}
 	return layout, nil
 }
@@ -237,7 +244,7 @@ func (f *DeviceFuncs) CreateComputePipelines(device Device, infos []ComputePipel
 	pipelines := make([]Pipeline, len(infos))
 	res := f.createComputePipelines(device, 0, uint32(len(infos)), &infos[0], 0, &pipelines[0])
 	if res != Success {
-		return nil, fmt.Errorf("vkCreateComputePipelines failed: %d", res)
+		return nil, resultError("vkCreateComputePipelines", res)
 	}
 	return pipelines, nil
 }
@@ -250,7 +257,7 @@ func (f *DeviceFuncs) CreateDescriptorPool(device Device, info *DescriptorPoolCr
 	var pool DescriptorPool
 	res := f.createDescriptorPool(device, info, 0, &pool)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreateDescriptorPool failed: %d", res)
+		return 0, resultError("vkCreateDescriptorPool", res)
 	}
 	return pool, nil
 }
@@ -266,7 +273,7 @@ func (f *DeviceFuncs) AllocateDescriptorSets(device Device, info *DescriptorSetA
 	sets := make([]DescriptorSet, info.DescriptorSetCount)
 	res := f.allocateDescriptorSets(device, info, &sets[0])
 	if res != Success {
-		return nil, fmt.Errorf("vkAllocateDescriptorSets failed: %d", res)
+		return nil, resultError("vkAllocateDescriptorSets", res)
 	}
 	return sets, nil
 }
@@ -282,7 +289,7 @@ func (f *DeviceFuncs) CreateCommandPool(device Device, info *CommandPoolCreateIn
 	var pool CommandPool
 	res := f.createCommandPool(device, info, 0, &pool)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreateCommandPool failed: %d", res)
+		return 0, resultError("vkCreateCommandPool", res)
 	}
 	return pool, nil
 }
@@ -298,7 +305,7 @@ func (f *DeviceFuncs) AllocateCommandBuffers(device Device, info *CommandBufferA
 	bufs := make([]CommandBuffer, info.CommandBufferCount)
 	res := f.allocateCommandBuffers(device, info, &bufs[0])
 	if res != Success {
-		return nil, fmt.Errorf("vkAllocateCommandBuffers failed: %d", res)
+		return nil, resultError("vkAllocateCommandBuffers", res)
 	}
 	return bufs, nil
 }
@@ -306,7 +313,7 @@ func (f *DeviceFuncs) AllocateCommandBuffers(device Device, info *CommandBufferA
 func (f *DeviceFuncs) BeginCommandBuffer(cb CommandBuffer, info *CommandBufferBeginInfo) error {
 	res := f.beginCommandBuffer(cb, info)
 	if res != Success {
-		return fmt.Errorf("vkBeginCommandBuffer failed: %d", res)
+		return resultError("vkBeginCommandBuffer", res)
 	}
 	return nil
 }
@@ -314,7 +321,7 @@ func (f *DeviceFuncs) BeginCommandBuffer(cb CommandBuffer, info *CommandBufferBe
 func (f *DeviceFuncs) EndCommandBuffer(cb CommandBuffer) error {
 	res := f.endCommandBuffer(cb)
 	if res != Success {
-		return fmt.Errorf("vkEndCommandBuffer failed: %d", res)
+		return resultError("vkEndCommandBuffer", res)
 	}
 	return nil
 }
@@ -353,7 +360,7 @@ func (f *DeviceFuncs) CreateFence(device Device, info *FenceCreateInfo) (Fence, 
 	var fence Fence
 	res := f.createFence(device, info, 0, &fence)
 	if res != Success {
-		return 0, fmt.Errorf("vkCreateFence failed: %d", res)
+		return 0, resultError("vkCreateFence", res)
 	}
 	return fence, nil
 }
@@ -372,7 +379,7 @@ func (f *DeviceFuncs) WaitForFences(device Device, fences []Fence, waitAll bool,
 	}
 	res := f.waitForFences(device, uint32(len(fences)), &fences[0], wa, timeout)
 	if res != Success {
-		return fmt.Errorf("vkWaitForFences failed: %d", res)
+		return resultError("vkWaitForFences", res)
 	}
 	return nil
 }
@@ -383,7 +390,7 @@ func (f *DeviceFuncs) ResetFences(device Device, fences []Fence) error {
 	}
 	res := f.resetFences(device, uint32(len(fences)), &fences[0])
 	if res != Success {
-		return fmt.Errorf("vkResetFences failed: %d", res)
+		return resultError("vkResetFences", res)
 	}
 	return nil
 }
@@ -391,7 +398,7 @@ func (f *DeviceFuncs) ResetFences(device Device, fences []Fence) error {
 func (f *DeviceFuncs) ResetCommandBuffer(cb CommandBuffer, flags uint32) error {
 	res := f.resetCommandBuffer(cb, flags)
 	if res != Success {
-		return fmt.Errorf("vkResetCommandBuffer failed: %d", res)
+		return resultError("vkResetCommandBuffer", res)
 	}
 	return nil
 }
@@ -400,13 +407,13 @@ func (f *DeviceFuncs) QueueSubmit(queue Queue, submits []SubmitInfo, fence Fence
 	if len(submits) == 0 {
 		res := f.queueSubmit(queue, 0, nil, fence)
 		if res != Success {
-			return fmt.Errorf("vkQueueSubmit failed: %d", res)
+			return resultError("vkQueueSubmit", res)
 		}
 		return nil
 	}
 	res := f.queueSubmit(queue, uint32(len(submits)), &submits[0], fence)
 	if res != Success {
-		return fmt.Errorf("vkQueueSubmit failed: %d", res)
+		return resultError("vkQueueSubmit", res)
 	}
 	return nil
 }
@@ -417,7 +424,7 @@ func (f *DeviceFuncs) FlushMappedMemoryRanges(device Device, ranges []MappedMemo
 	}
 	res := f.flushMappedMemoryRanges(device, uint32(len(ranges)), &ranges[0])
 	if res != Success {
-		return fmt.Errorf("vkFlushMappedMemoryRanges failed: %d", res)
+		return resultError("vkFlushMappedMemoryRanges", res)
 	}
 	return nil
 }
@@ -428,7 +435,7 @@ func (f *DeviceFuncs) InvalidateMappedMemoryRanges(device Device, ranges []Mappe
 	}
 	res := f.invalidateMappedMemoryRanges(device, uint32(len(ranges)), &ranges[0])
 	if res != Success {
-		return fmt.Errorf("vkInvalidateMappedMemoryRanges failed: %d", res)
+		return resultError("vkInvalidateMappedMemoryRanges", res)
 	}
 	return nil
 }
@@ -436,7 +443,7 @@ func (f *DeviceFuncs) InvalidateMappedMemoryRanges(device Device, ranges []Mappe
 func (f *DeviceFuncs) DeviceWaitIdle(device Device) error {
 	res := f.deviceWaitIdle(device)
 	if res != Success {
-		return fmt.Errorf("vkDeviceWaitIdle failed: %d", res)
+		return resultError("vkDeviceWaitIdle", res)
 	}
 	return nil
 }

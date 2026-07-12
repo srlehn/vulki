@@ -1,8 +1,11 @@
 package vk
 
-import "unsafe"
+import (
+	"fmt"
+	"unsafe"
+)
 
-// Handle types — all opaque pointers represented as uintptr.
+// Handle types - all opaque pointers represented as uintptr.
 type (
 	Instance            uintptr
 	PhysicalDevice      uintptr
@@ -25,11 +28,85 @@ type (
 type Result int32
 
 const (
-	Success    Result = 0
-	NotReady   Result = 1
-	Timeout    Result = 2
-	Incomplete Result = 5
+	Success                   Result = 0
+	NotReady                  Result = 1
+	Timeout                   Result = 2
+	Incomplete                Result = 5
+	ErrorOutOfHostMemory      Result = -1
+	ErrorOutOfDeviceMemory    Result = -2
+	ErrorInitializationFailed Result = -3
+	ErrorDeviceLost           Result = -4
+	ErrorMemoryMapFailed      Result = -5
+	ErrorLayerNotPresent      Result = -6
+	ErrorExtensionNotPresent  Result = -7
+	ErrorFeatureNotPresent    Result = -8
+	ErrorIncompatibleDriver   Result = -9
+	ErrorTooManyObjects       Result = -10
+	ErrorFormatNotSupported   Result = -11
+	ErrorFragmentedPool       Result = -12
+	ErrorUnknown              Result = -13
 )
+
+// String returns the Vulkan name for a known result and its numeric value for
+// an unknown result.
+func (r Result) String() string {
+	switch r {
+	case Success:
+		return "VK_SUCCESS"
+	case NotReady:
+		return "VK_NOT_READY"
+	case Timeout:
+		return "VK_TIMEOUT"
+	case Incomplete:
+		return "VK_INCOMPLETE"
+	case ErrorOutOfHostMemory:
+		return "VK_ERROR_OUT_OF_HOST_MEMORY"
+	case ErrorOutOfDeviceMemory:
+		return "VK_ERROR_OUT_OF_DEVICE_MEMORY"
+	case ErrorInitializationFailed:
+		return "VK_ERROR_INITIALIZATION_FAILED"
+	case ErrorDeviceLost:
+		return "VK_ERROR_DEVICE_LOST"
+	case ErrorMemoryMapFailed:
+		return "VK_ERROR_MEMORY_MAP_FAILED"
+	case ErrorLayerNotPresent:
+		return "VK_ERROR_LAYER_NOT_PRESENT"
+	case ErrorExtensionNotPresent:
+		return "VK_ERROR_EXTENSION_NOT_PRESENT"
+	case ErrorFeatureNotPresent:
+		return "VK_ERROR_FEATURE_NOT_PRESENT"
+	case ErrorIncompatibleDriver:
+		return "VK_ERROR_INCOMPATIBLE_DRIVER"
+	case ErrorTooManyObjects:
+		return "VK_ERROR_TOO_MANY_OBJECTS"
+	case ErrorFormatNotSupported:
+		return "VK_ERROR_FORMAT_NOT_SUPPORTED"
+	case ErrorFragmentedPool:
+		return "VK_ERROR_FRAGMENTED_POOL"
+	case ErrorUnknown:
+		return "VK_ERROR_UNKNOWN"
+	default:
+		return fmt.Sprintf("VkResult(%d)", int32(r))
+	}
+}
+
+// Error reports a failed Vulkan operation and preserves its result code for
+// inspection with errors.As.
+type Error struct {
+	Op     string
+	Result Result
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return "vk: operation failed"
+	}
+	return fmt.Sprintf("vk: %s failed: %s", e.Op, e.Result)
+}
+
+func resultError(op string, result Result) error {
+	return &Error{Op: op, Result: result}
+}
 
 // Structure types (sType values).
 const (
