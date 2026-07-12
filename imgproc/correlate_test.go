@@ -52,7 +52,7 @@ func TestFFT_RoundTrip(t *testing.T) {
 
 	w, h := 16, 16
 	n := w * h
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	dataBuf, err := compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestFFT_KnownSpectrum(t *testing.T) {
 	// Use 8x1 = single row.
 	w, h := 8, 1
 	n := w * h
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	dataBuf, err := compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {
@@ -190,7 +190,7 @@ func TestMagnitude(t *testing.T) {
 	ctx := testContext(t)
 
 	n := 8
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	complexBuf, err := compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {
@@ -270,7 +270,7 @@ func TestHighpass(t *testing.T) {
 
 	w, h := 4, 4
 	n := w * h
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	dataBuf, err := compute.NewTypedBuffer[float32](ctx, n, usage)
 	if err != nil {
@@ -341,7 +341,7 @@ func TestCrosspower_IdenticalSignals(t *testing.T) {
 	ctx := testContext(t)
 
 	n := 16
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	aBuf, err := compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {
@@ -413,7 +413,7 @@ func TestPeakFind_KnownLocation(t *testing.T) {
 	ctx := testContext(t)
 
 	const w, h = 16, 16
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 	input, err := compute.NewTypedBuffer[[2]float32](ctx, w*h, usage)
 	if err != nil {
 		t.Fatal(err)
@@ -488,7 +488,7 @@ func TestCrosspower_IFFT_PeaksAtOrigin(t *testing.T) {
 
 	w, h := 16, 16
 	n := w * h
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	aBuf, err := compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {
@@ -580,7 +580,7 @@ func TestPhaseCorrelation_KnownTranslation(t *testing.T) {
 
 	w, h := 32, 32
 	n := w * h
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	aBuf, err := compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {
@@ -691,7 +691,7 @@ func TestLogPolar_SamplesFromDC(t *testing.T) {
 	srcN := srcW * srcH
 	dstW, dstH := 16, 16
 	dstN := dstW * dstH
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	srcBuf, err := compute.NewTypedBuffer[float32](ctx, srcN, usage)
 	if err != nil {
@@ -964,7 +964,7 @@ func TestFFT_MatchesCPUReference(t *testing.T) {
 
 	w := 16
 	n := w
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	dataBuf, err := compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {
@@ -1032,7 +1032,7 @@ func TestPipeline_DumpIntermediates(t *testing.T) {
 
 	w, h := 8, 8
 	n := w * h
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	complexBuf, err := compute.NewTypedBuffer[[2]float32](ctx, n, usage)
 	if err != nil {

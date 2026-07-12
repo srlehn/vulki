@@ -194,7 +194,7 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		}
 	}
 
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 
 	// RGBA buffers: hold full raw image pixels.
 	rgbaSize := maxW * maxH
@@ -606,7 +606,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	// ==== Phase 1: Rotation & Scale (per Reddy & Chatterji §III) ====
 
 	// GrayscalePad A: RGBA → complex (crop centered square + zero-pad to pow2).
-	// No DoG, no Hann — paper relies on highpass filter of magnitude spectrum.
+	// No DoG or Hann: the paper relies on a high-pass filter of the magnitude spectrum.
 	gpParamsA := encodeGrayPadParams(srcWA, srcHA, srcStrideA, padSize, cropU32)
 	rec.UpdateBuffer(paramsBuf, 0, gpParamsA)
 	rec.BarrierTransferToCompute(paramsBuf)

@@ -15,7 +15,7 @@ type TypedBuffer[T any] struct {
 }
 
 // NewTypedBuffer creates a typed buffer that holds count elements of type T.
-func NewTypedBuffer[T any](ctx *Context, count int, usage uint32) (*TypedBuffer[T], error) {
+func NewTypedBuffer[T any](ctx *Context, count int, usage vk.BufferUsageFlags) (*TypedBuffer[T], error) {
 	if err := validateGPUValueType[T](); err != nil {
 		return nil, err
 	}

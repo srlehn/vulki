@@ -35,16 +35,16 @@ type DeviceFuncs struct {
 	allocateCommandBuffers       func(device Device, pAllocateInfo *CommandBufferAllocateInfo, pBuffers *CommandBuffer) Result
 	beginCommandBuffer           func(cb CommandBuffer, pBeginInfo *CommandBufferBeginInfo) Result
 	endCommandBuffer             func(cb CommandBuffer) Result
-	cmdBindPipeline              func(cb CommandBuffer, bindPoint uint32, pipeline Pipeline)
-	cmdBindDescriptorSets        func(cb CommandBuffer, bindPoint uint32, layout PipelineLayout, firstSet, setCount uint32, pSets *DescriptorSet, dynOffsetCount uint32, pDynOffsets uintptr)
+	cmdBindPipeline              func(cb CommandBuffer, bindPoint PipelineBindPoint, pipeline Pipeline)
+	cmdBindDescriptorSets        func(cb CommandBuffer, bindPoint PipelineBindPoint, layout PipelineLayout, firstSet, setCount uint32, pSets *DescriptorSet, dynOffsetCount uint32, pDynOffsets uintptr)
 	cmdDispatch                  func(cb CommandBuffer, groupCountX, groupCountY, groupCountZ uint32)
 	cmdCopyBuffer                func(cb CommandBuffer, src, dst Buffer, regionCount uint32, pRegions *BufferCopy)
-	cmdPipelineBarrier           func(cb CommandBuffer, srcStage, dstStage uint32, dependencyFlags uint32, memBarrierCount uint32, pMemBarriers *MemoryBarrier, bufBarrierCount uint32, pBufBarriers *BufferMemoryBarrier, imgBarrierCount uint32, pImgBarriers uintptr)
+	cmdPipelineBarrier           func(cb CommandBuffer, srcStage, dstStage PipelineStageFlags, dependencyFlags uint32, memBarrierCount uint32, pMemBarriers *MemoryBarrier, bufBarrierCount uint32, pBufBarriers *BufferMemoryBarrier, imgBarrierCount uint32, pImgBarriers uintptr)
 	createFence                  func(device Device, pCreateInfo *FenceCreateInfo, pAllocator uintptr, pFence *Fence) Result
 	destroyFence                 func(device Device, fence Fence, pAllocator uintptr)
 	waitForFences                func(device Device, fenceCount uint32, pFences *Fence, waitAll uint32, timeout uint64) Result
 	resetFences                  func(device Device, fenceCount uint32, pFences *Fence) Result
-	resetCommandBuffer           func(cb CommandBuffer, flags uint32) Result
+	resetCommandBuffer           func(cb CommandBuffer, flags CommandBufferResetFlags) Result
 	queueSubmit                  func(queue Queue, submitCount uint32, pSubmits *SubmitInfo, fence Fence) Result
 	flushMappedMemoryRanges      func(device Device, rangeCount uint32, pRanges *MappedMemoryRange) Result
 	invalidateMappedMemoryRanges func(device Device, rangeCount uint32, pRanges *MappedMemoryRange) Result
@@ -326,11 +326,11 @@ func (f *DeviceFuncs) EndCommandBuffer(cb CommandBuffer) error {
 	return nil
 }
 
-func (f *DeviceFuncs) CmdBindPipeline(cb CommandBuffer, bindPoint uint32, pipeline Pipeline) {
+func (f *DeviceFuncs) CmdBindPipeline(cb CommandBuffer, bindPoint PipelineBindPoint, pipeline Pipeline) {
 	f.cmdBindPipeline(cb, bindPoint, pipeline)
 }
 
-func (f *DeviceFuncs) CmdBindDescriptorSets(cb CommandBuffer, bindPoint uint32, layout PipelineLayout, firstSet uint32, sets []DescriptorSet) {
+func (f *DeviceFuncs) CmdBindDescriptorSets(cb CommandBuffer, bindPoint PipelineBindPoint, layout PipelineLayout, firstSet uint32, sets []DescriptorSet) {
 	if len(sets) == 0 {
 		return
 	}
@@ -348,7 +348,7 @@ func (f *DeviceFuncs) CmdCopyBuffer(cb CommandBuffer, src, dst Buffer, regions [
 	f.cmdCopyBuffer(cb, src, dst, uint32(len(regions)), &regions[0])
 }
 
-func (f *DeviceFuncs) CmdPipelineBarrier(cb CommandBuffer, srcStage, dstStage uint32, bufBarriers []BufferMemoryBarrier) {
+func (f *DeviceFuncs) CmdPipelineBarrier(cb CommandBuffer, srcStage, dstStage PipelineStageFlags, bufBarriers []BufferMemoryBarrier) {
 	var pBuf *BufferMemoryBarrier
 	if len(bufBarriers) > 0 {
 		pBuf = &bufBarriers[0]
@@ -395,7 +395,7 @@ func (f *DeviceFuncs) ResetFences(device Device, fences []Fence) error {
 	return nil
 }
 
-func (f *DeviceFuncs) ResetCommandBuffer(cb CommandBuffer, flags uint32) error {
+func (f *DeviceFuncs) ResetCommandBuffer(cb CommandBuffer, flags CommandBufferResetFlags) error {
 	res := f.resetCommandBuffer(cb, flags)
 	if res != Success {
 		return resultError("vkResetCommandBuffer", res)

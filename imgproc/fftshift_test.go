@@ -33,7 +33,7 @@ func TestFftshift(t *testing.T) {
 	// [2  3  0  1 ]
 	// [6  7  4  5 ]
 
-	usage := uint32(vk.BufferUsageStorageBufferBit)
+	usage := vk.BufferUsageStorageBufferBit
 	buf, err := compute.NewTypedBuffer[float32](ctx, n, usage)
 	if err != nil {
 		t.Fatal(err)

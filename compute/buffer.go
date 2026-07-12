@@ -17,7 +17,7 @@ type Buffer struct {
 }
 
 // CreateBuffer creates a device-local buffer (for compute) and a host-visible staging buffer (for transfers).
-func (c *Context) CreateBuffer(size uint64, extraUsage uint32) (*Buffer, error) {
+func (c *Context) CreateBuffer(size uint64, extraUsage vk.BufferUsageFlags) (*Buffer, error) {
 	if c == nil || c.DevFuncs == nil || c.Device == 0 {
 		return nil, fmt.Errorf("compute: invalid context")
 	}

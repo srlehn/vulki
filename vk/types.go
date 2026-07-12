@@ -27,6 +27,24 @@ type (
 // Result codes.
 type Result int32
 
+// Bool32 is Vulkan's 32-bit boolean representation.
+type Bool32 uint32
+
+// PhysicalDeviceType identifies a broad class of Vulkan device.
+type PhysicalDeviceType uint32
+
+// Physical device types.
+const (
+	PhysicalDeviceTypeOther         PhysicalDeviceType = 0
+	PhysicalDeviceTypeIntegratedGPU PhysicalDeviceType = 1
+	PhysicalDeviceTypeDiscreteGPU   PhysicalDeviceType = 2
+	PhysicalDeviceTypeVirtualGPU    PhysicalDeviceType = 3
+	PhysicalDeviceTypeCPU           PhysicalDeviceType = 4
+)
+
+// SampleCountFlags selects supported sample counts.
+type SampleCountFlags uint32
+
 const (
 	Success                   Result = 0
 	NotReady                  Result = 1
@@ -108,38 +126,44 @@ func resultError(op string, result Result) error {
 	return &Error{Op: op, Result: result}
 }
 
+// StructureType identifies a Vulkan structure passed through the API.
+type StructureType uint32
+
 // Structure types (sType values).
 const (
-	StructureTypeApplicationInfo               = 0
-	StructureTypeInstanceCreateInfo            = 1
-	StructureTypeDeviceQueueCreateInfo         = 2
-	StructureTypeDeviceCreateInfo              = 3
-	StructureTypeSubmitInfo                    = 4
-	StructureTypeMemoryAllocateInfo            = 5
-	StructureTypeMappedMemoryRange             = 6
-	StructureTypeFenceCreateInfo               = 8
-	StructureTypeBufferCreateInfo              = 12
-	StructureTypeShaderModuleCreateInfo        = 16
-	StructureTypeComputePipelineCreateInfo     = 29
-	StructureTypePipelineShaderStageCreateInfo = 18
-	StructureTypePipelineLayoutCreateInfo      = 30
-	StructureTypeDescriptorSetLayoutCreateInfo = 32
-	StructureTypeDescriptorPoolCreateInfo      = 33
-	StructureTypeDescriptorSetAllocateInfo     = 34
-	StructureTypeWriteDescriptorSet            = 35
-	StructureTypeCommandPoolCreateInfo         = 39
-	StructureTypeCommandBufferAllocateInfo     = 40
-	StructureTypeCommandBufferBeginInfo        = 42
-	StructureTypeBufferMemoryBarrier           = 44
-	StructureTypeMemoryBarrier                 = 46
+	StructureTypeApplicationInfo               StructureType = 0
+	StructureTypeInstanceCreateInfo            StructureType = 1
+	StructureTypeDeviceQueueCreateInfo         StructureType = 2
+	StructureTypeDeviceCreateInfo              StructureType = 3
+	StructureTypeSubmitInfo                    StructureType = 4
+	StructureTypeMemoryAllocateInfo            StructureType = 5
+	StructureTypeMappedMemoryRange             StructureType = 6
+	StructureTypeFenceCreateInfo               StructureType = 8
+	StructureTypeBufferCreateInfo              StructureType = 12
+	StructureTypeShaderModuleCreateInfo        StructureType = 16
+	StructureTypeComputePipelineCreateInfo     StructureType = 29
+	StructureTypePipelineShaderStageCreateInfo StructureType = 18
+	StructureTypePipelineLayoutCreateInfo      StructureType = 30
+	StructureTypeDescriptorSetLayoutCreateInfo StructureType = 32
+	StructureTypeDescriptorPoolCreateInfo      StructureType = 33
+	StructureTypeDescriptorSetAllocateInfo     StructureType = 34
+	StructureTypeWriteDescriptorSet            StructureType = 35
+	StructureTypeCommandPoolCreateInfo         StructureType = 39
+	StructureTypeCommandBufferAllocateInfo     StructureType = 40
+	StructureTypeCommandBufferBeginInfo        StructureType = 42
+	StructureTypeBufferMemoryBarrier           StructureType = 44
+	StructureTypeMemoryBarrier                 StructureType = 46
 )
+
+// BufferUsageFlags controls how a buffer may be used.
+type BufferUsageFlags uint32
 
 // Buffer usage flags.
 const (
-	BufferUsageTransferSrcBit   = 0x00000001
-	BufferUsageTransferDstBit   = 0x00000002
-	BufferUsageUniformBufferBit = 0x00000010
-	BufferUsageStorageBufferBit = 0x00000020
+	BufferUsageTransferSrcBit   BufferUsageFlags = 0x00000001
+	BufferUsageTransferDstBit   BufferUsageFlags = 0x00000002
+	BufferUsageUniformBufferBit BufferUsageFlags = 0x00000010
+	BufferUsageStorageBufferBit BufferUsageFlags = 0x00000020
 )
 
 // Memory property flags.
@@ -151,57 +175,87 @@ const (
 	MemoryPropertyHostCoherentBit MemoryPropertyFlags = 0x00000004
 )
 
+// SharingMode controls buffer access across queue families.
+type SharingMode uint32
+
 // Sharing mode.
 const (
-	SharingModeExclusive = 0
+	SharingModeExclusive SharingMode = 0
 )
+
+// DescriptorType identifies the resource represented by a descriptor.
+type DescriptorType uint32
 
 // Descriptor type.
 const (
-	DescriptorTypeStorageBuffer = 7
+	DescriptorTypeStorageBuffer DescriptorType = 7
 )
+
+// PipelineBindPoint identifies the pipeline type bound to a command buffer.
+type PipelineBindPoint uint32
 
 // Pipeline bind point.
 const (
-	PipelineBindPointCompute = 1
+	PipelineBindPointCompute PipelineBindPoint = 1
 )
+
+// ShaderStageFlags selects shader stages.
+type ShaderStageFlags uint32
 
 // Shader stage flags.
 const (
-	ShaderStageComputeBit = 0x00000020
+	ShaderStageComputeBit ShaderStageFlags = 0x00000020
 )
+
+// CommandBufferLevel identifies a primary or secondary command buffer.
+type CommandBufferLevel uint32
 
 // Command buffer level.
 const (
-	CommandBufferLevelPrimary = 0
+	CommandBufferLevelPrimary CommandBufferLevel = 0
 )
+
+// CommandBufferUsageFlags describes command buffer recording usage.
+type CommandBufferUsageFlags uint32
 
 // Command buffer usage flags.
 const (
-	CommandBufferUsageOneTimeSubmitBit = 0x00000001
+	CommandBufferUsageOneTimeSubmitBit CommandBufferUsageFlags = 0x00000001
 )
+
+// CommandBufferResetFlags controls command buffer reset behavior.
+type CommandBufferResetFlags uint32
+
+// QueueFlags describes operations supported by a queue family.
+type QueueFlags uint32
 
 // Queue flags.
 const (
-	QueueComputeBit = 0x00000002
+	QueueComputeBit QueueFlags = 0x00000002
 )
+
+// AccessFlags describes memory accesses for synchronization.
+type AccessFlags uint32
 
 // Access flags.
 const (
-	AccessShaderReadBit    = 0x00000020
-	AccessShaderWriteBit   = 0x00000040
-	AccessTransferReadBit  = 0x00000800
-	AccessTransferWriteBit = 0x00001000
-	AccessHostReadBit      = 0x00002000
-	AccessMemoryReadBit    = 0x00008000
-	AccessMemoryWriteBit   = 0x00010000
+	AccessShaderReadBit    AccessFlags = 0x00000020
+	AccessShaderWriteBit   AccessFlags = 0x00000040
+	AccessTransferReadBit  AccessFlags = 0x00000800
+	AccessTransferWriteBit AccessFlags = 0x00001000
+	AccessHostReadBit      AccessFlags = 0x00002000
+	AccessMemoryReadBit    AccessFlags = 0x00008000
+	AccessMemoryWriteBit   AccessFlags = 0x00010000
 )
+
+// PipelineStageFlags selects pipeline stages for synchronization.
+type PipelineStageFlags uint32
 
 // Pipeline stage flags.
 const (
-	PipelineStageComputeShaderBit = 0x00000800
-	PipelineStageTransferBit      = 0x00001000
-	PipelineStageHostBit          = 0x00004000
+	PipelineStageComputeShaderBit PipelineStageFlags = 0x00000800
+	PipelineStageTransferBit      PipelineStageFlags = 0x00001000
+	PipelineStageHostBit          PipelineStageFlags = 0x00004000
 )
 
 // Whole size sentinel.
@@ -210,7 +264,7 @@ const WholeSize = ^uint64(0)
 // ---- Structs matching Vulkan C layout ----
 
 type ApplicationInfo struct {
-	SType              uint32
+	SType              StructureType
 	PNext              uintptr
 	PApplicationName   *byte
 	ApplicationVersion uint32
@@ -220,7 +274,7 @@ type ApplicationInfo struct {
 }
 
 type InstanceCreateInfo struct {
-	SType                   uint32
+	SType                   StructureType
 	PNext                   uintptr
 	Flags                   uint32
 	PApplicationInfo        *ApplicationInfo
@@ -231,7 +285,7 @@ type InstanceCreateInfo struct {
 }
 
 type DeviceQueueCreateInfo struct {
-	SType            uint32
+	SType            StructureType
 	PNext            uintptr
 	Flags            uint32
 	QueueFamilyIndex uint32
@@ -240,7 +294,7 @@ type DeviceQueueCreateInfo struct {
 }
 
 type DeviceCreateInfo struct {
-	SType                   uint32
+	SType                   StructureType
 	PNext                   uintptr
 	Flags                   uint32
 	QueueCreateInfoCount    uint32
@@ -253,25 +307,25 @@ type DeviceCreateInfo struct {
 }
 
 type BufferCreateInfo struct {
-	SType                 uint32
+	SType                 StructureType
 	PNext                 uintptr
 	Flags                 uint32
 	Size                  uint64
-	Usage                 uint32
-	SharingMode           uint32
+	Usage                 BufferUsageFlags
+	SharingMode           SharingMode
 	QueueFamilyIndexCount uint32
 	PQueueFamilyIndices   uintptr
 }
 
 type MemoryAllocateInfo struct {
-	SType           uint32
+	SType           StructureType
 	PNext           uintptr
 	AllocationSize  uint64
 	MemoryTypeIndex uint32
 }
 
 type ShaderModuleCreateInfo struct {
-	SType    uint32
+	SType    StructureType
 	PNext    uintptr
 	Flags    uint32
 	CodeSize uintptr
@@ -280,14 +334,14 @@ type ShaderModuleCreateInfo struct {
 
 type DescriptorSetLayoutBinding struct {
 	Binding            uint32
-	DescriptorType     uint32
+	DescriptorType     DescriptorType
 	DescriptorCount    uint32
-	StageFlags         uint32
+	StageFlags         ShaderStageFlags
 	PImmutableSamplers uintptr
 }
 
 type DescriptorSetLayoutCreateInfo struct {
-	SType        uint32
+	SType        StructureType
 	PNext        uintptr
 	Flags        uint32
 	BindingCount uint32
@@ -295,7 +349,7 @@ type DescriptorSetLayoutCreateInfo struct {
 }
 
 type PipelineLayoutCreateInfo struct {
-	SType                  uint32
+	SType                  StructureType
 	PNext                  uintptr
 	Flags                  uint32
 	SetLayoutCount         uint32
@@ -312,17 +366,17 @@ type SpecializationInfo struct {
 }
 
 type PipelineShaderStageCreateInfo struct {
-	SType               uint32
+	SType               StructureType
 	PNext               uintptr
 	Flags               uint32
-	Stage               uint32
+	Stage               ShaderStageFlags
 	Module              ShaderModule
 	PName               *byte
 	PSpecializationInfo *SpecializationInfo
 }
 
 type ComputePipelineCreateInfo struct {
-	SType              uint32
+	SType              StructureType
 	PNext              uintptr
 	Flags              uint32
 	Stage              PipelineShaderStageCreateInfo
@@ -332,12 +386,12 @@ type ComputePipelineCreateInfo struct {
 }
 
 type DescriptorPoolSize struct {
-	Type            uint32
+	Type            DescriptorType
 	DescriptorCount uint32
 }
 
 type DescriptorPoolCreateInfo struct {
-	SType         uint32
+	SType         StructureType
 	PNext         uintptr
 	Flags         uint32
 	MaxSets       uint32
@@ -346,7 +400,7 @@ type DescriptorPoolCreateInfo struct {
 }
 
 type DescriptorSetAllocateInfo struct {
-	SType              uint32
+	SType              StructureType
 	PNext              uintptr
 	DescriptorPool     DescriptorPool
 	DescriptorSetCount uint32
@@ -360,42 +414,42 @@ type DescriptorBufferInfo struct {
 }
 
 type WriteDescriptorSet struct {
-	SType            uint32
+	SType            StructureType
 	PNext            uintptr
 	DstSet           DescriptorSet
 	DstBinding       uint32
 	DstArrayElement  uint32
 	DescriptorCount  uint32
-	DescriptorType   uint32
+	DescriptorType   DescriptorType
 	PImageInfo       uintptr
 	PBufferInfo      *DescriptorBufferInfo
 	PTexelBufferView uintptr
 }
 
 type CommandPoolCreateInfo struct {
-	SType            uint32
+	SType            StructureType
 	PNext            uintptr
 	Flags            uint32
 	QueueFamilyIndex uint32
 }
 
 type CommandBufferAllocateInfo struct {
-	SType              uint32
+	SType              StructureType
 	PNext              uintptr
 	CommandPool        CommandPool
-	Level              uint32
+	Level              CommandBufferLevel
 	CommandBufferCount uint32
 }
 
 type CommandBufferBeginInfo struct {
-	SType            uint32
+	SType            StructureType
 	PNext            uintptr
-	Flags            uint32
+	Flags            CommandBufferUsageFlags
 	PInheritanceInfo uintptr
 }
 
 type SubmitInfo struct {
-	SType                uint32
+	SType                StructureType
 	PNext                uintptr
 	WaitSemaphoreCount   uint32
 	PWaitSemaphores      uintptr
@@ -407,7 +461,7 @@ type SubmitInfo struct {
 }
 
 type FenceCreateInfo struct {
-	SType uint32
+	SType StructureType
 	PNext uintptr
 	Flags uint32
 }
@@ -439,7 +493,7 @@ type PhysicalDeviceMemoryProperties struct {
 }
 
 type MappedMemoryRange struct {
-	SType  uint32
+	SType  StructureType
 	PNext  uintptr
 	Memory DeviceMemory
 	Offset uint64
@@ -447,10 +501,10 @@ type MappedMemoryRange struct {
 }
 
 type BufferMemoryBarrier struct {
-	SType               uint32
+	SType               StructureType
 	PNext               uintptr
-	SrcAccessMask       uint32
-	DstAccessMask       uint32
+	SrcAccessMask       AccessFlags
+	DstAccessMask       AccessFlags
 	SrcQueueFamilyIndex uint32
 	DstQueueFamilyIndex uint32
 	Buffer              Buffer
@@ -459,10 +513,10 @@ type BufferMemoryBarrier struct {
 }
 
 type MemoryBarrier struct {
-	SType         uint32
+	SType         StructureType
 	PNext         uintptr
-	SrcAccessMask uint32
-	DstAccessMask uint32
+	SrcAccessMask AccessFlags
+	DstAccessMask AccessFlags
 }
 
 type BufferCopy struct {
@@ -472,23 +526,142 @@ type BufferCopy struct {
 }
 
 type QueueFamilyProperties struct {
-	QueueFlags                  uint32
+	QueueFlags                  QueueFlags
 	QueueCount                  uint32
 	TimestampValidBits          uint32
 	MinImageTransferGranularity [3]uint32
 }
 
-type PhysicalDeviceProperties struct {
-	ApiVersion       uint32
-	DriverVersion    uint32
-	VendorID         uint32
-	DeviceID         uint32
-	DeviceType       uint32
-	DeviceName       [256]byte
-	_                [16]byte // pipelineCacheUUID
-	Limits           [504]byte
-	SparseProperties [20]byte
+// physicalDeviceLimits preserves VkPhysicalDeviceLimits size and alignment.
+// The high-level package exposes only the portable limits it uses.
+// PhysicalDeviceLimits reports implementation-dependent Vulkan limits.
+type PhysicalDeviceLimits struct {
+	MaxImageDimension1D                             uint32
+	MaxImageDimension2D                             uint32
+	MaxImageDimension3D                             uint32
+	MaxImageDimensionCube                           uint32
+	MaxImageArrayLayers                             uint32
+	MaxTexelBufferElements                          uint32
+	MaxUniformBufferRange                           uint32
+	MaxStorageBufferRange                           uint32
+	MaxPushConstantsSize                            uint32
+	MaxMemoryAllocationCount                        uint32
+	MaxSamplerAllocationCount                       uint32
+	BufferImageGranularity                          uint64
+	SparseAddressSpaceSize                          uint64
+	MaxBoundDescriptorSets                          uint32
+	MaxPerStageDescriptorSamplers                   uint32
+	MaxPerStageDescriptorUniformBuffers             uint32
+	MaxPerStageDescriptorStorageBuffers             uint32
+	MaxPerStageDescriptorSampledImages              uint32
+	MaxPerStageDescriptorStorageImages              uint32
+	MaxPerStageDescriptorInputAttachments           uint32
+	MaxPerStageResources                            uint32
+	MaxDescriptorSetSamplers                        uint32
+	MaxDescriptorSetUniformBuffers                  uint32
+	MaxDescriptorSetUniformBuffersDynamic           uint32
+	MaxDescriptorSetStorageBuffers                  uint32
+	MaxDescriptorSetStorageBuffersDynamic           uint32
+	MaxDescriptorSetSampledImages                   uint32
+	MaxDescriptorSetStorageImages                   uint32
+	MaxDescriptorSetInputAttachments                uint32
+	MaxVertexInputAttributes                        uint32
+	MaxVertexInputBindings                          uint32
+	MaxVertexInputAttributeOffset                   uint32
+	MaxVertexInputBindingStride                     uint32
+	MaxVertexOutputComponents                       uint32
+	MaxTessellationGenerationLevel                  uint32
+	MaxTessellationPatchSize                        uint32
+	MaxTessellationControlPerVertexInputComponents  uint32
+	MaxTessellationControlPerVertexOutputComponents uint32
+	MaxTessellationControlPerPatchOutputComponents  uint32
+	MaxTessellationControlTotalOutputComponents     uint32
+	MaxTessellationEvaluationInputComponents        uint32
+	MaxTessellationEvaluationOutputComponents       uint32
+	MaxGeometryShaderInvocations                    uint32
+	MaxGeometryInputComponents                      uint32
+	MaxGeometryOutputComponents                     uint32
+	MaxGeometryOutputVertices                       uint32
+	MaxGeometryTotalOutputComponents                uint32
+	MaxFragmentInputComponents                      uint32
+	MaxFragmentOutputAttachments                    uint32
+	MaxFragmentDualSrcAttachments                   uint32
+	MaxFragmentCombinedOutputResources              uint32
+	MaxComputeSharedMemorySize                      uint32
+	MaxComputeWorkGroupCount                        [3]uint32
+	MaxComputeWorkGroupInvocations                  uint32
+	MaxComputeWorkGroupSize                         [3]uint32
+	SubPixelPrecisionBits                           uint32
+	SubTexelPrecisionBits                           uint32
+	MipmapPrecisionBits                             uint32
+	MaxDrawIndexedIndexValue                        uint32
+	MaxDrawIndirectCount                            uint32
+	MaxSamplerLODBias                               float32
+	MaxSamplerAnisotropy                            float32
+	MaxViewports                                    uint32
+	MaxViewportDimensions                           [2]uint32
+	ViewportBoundsRange                             [2]float32
+	ViewportSubPixelBits                            uint32
+	MinMemoryMapAlignment                           uintptr
+	MinTexelBufferOffsetAlignment                   uint64
+	MinUniformBufferOffsetAlignment                 uint64
+	MinStorageBufferOffsetAlignment                 uint64
+	MinTexelOffset                                  int32
+	MaxTexelOffset                                  uint32
+	MinTexelGatherOffset                            int32
+	MaxTexelGatherOffset                            uint32
+	MinInterpolationOffset                          float32
+	MaxInterpolationOffset                          float32
+	SubPixelInterpolationOffsetBits                 uint32
+	MaxFramebufferWidth                             uint32
+	MaxFramebufferHeight                            uint32
+	MaxFramebufferLayers                            uint32
+	FramebufferColorSampleCounts                    SampleCountFlags
+	FramebufferDepthSampleCounts                    SampleCountFlags
+	FramebufferStencilSampleCounts                  SampleCountFlags
+	FramebufferNoAttachmentsSampleCounts            SampleCountFlags
+	MaxColorAttachments                             uint32
+	SampledImageColorSampleCounts                   SampleCountFlags
+	SampledImageIntegerSampleCounts                 SampleCountFlags
+	SampledImageDepthSampleCounts                   SampleCountFlags
+	SampledImageStencilSampleCounts                 SampleCountFlags
+	StorageImageSampleCounts                        SampleCountFlags
+	MaxSampleMaskWords                              uint32
+	TimestampComputeAndGraphics                     Bool32
+	TimestampPeriod                                 float32
+	MaxClipDistances                                uint32
+	MaxCullDistances                                uint32
+	MaxCombinedClipAndCullDistances                 uint32
+	DiscreteQueuePriorities                         uint32
+	PointSizeRange                                  [2]float32
+	LineWidthRange                                  [2]float32
+	PointSizeGranularity                            float32
+	LineWidthGranularity                            float32
+	StrictLines                                     Bool32
+	StandardSampleLocations                         Bool32
+	OptimalBufferCopyOffsetAlignment                uint64
+	OptimalBufferCopyRowPitchAlignment              uint64
+	NonCoherentAtomSize                             uint64
 }
 
-// CommandPoolResetReleaseResourcesBit for resetting command pools.
-const CommandPoolResetReleaseResourcesBit = 0x00000001
+// PhysicalDeviceSparseProperties reports supported sparse residency behavior.
+type PhysicalDeviceSparseProperties struct {
+	ResidencyStandard2DBlockShape            Bool32
+	ResidencyStandard2DMultisampleBlockShape Bool32
+	ResidencyStandard3DBlockShape            Bool32
+	ResidencyAlignedMipSize                  Bool32
+	ResidencyNonResidentStrict               Bool32
+}
+
+// PhysicalDeviceProperties reports core properties of a Vulkan physical device.
+type PhysicalDeviceProperties struct {
+	APIVersion        uint32
+	DriverVersion     uint32
+	VendorID          uint32
+	DeviceID          uint32
+	DeviceType        PhysicalDeviceType
+	DeviceName        [256]byte
+	PipelineCacheUUID [16]byte
+	Limits            PhysicalDeviceLimits
+	SparseProperties  PhysicalDeviceSparseProperties
+}
