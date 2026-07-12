@@ -14,6 +14,7 @@ import (
 // Its zero value is closed and safe to close again.
 type Device struct {
 	mu        sync.Mutex
+	cond      *sync.Cond
 	queueMu   sync.Mutex
 	state     *deviceState
 	info      DeviceInfo
@@ -23,6 +24,7 @@ type Device struct {
 	closed    bool
 	closeDone chan struct{}
 	closeErr  error
+	active    int
 }
 
 // DeviceInfo is an immutable snapshot of the selected compute device.
@@ -66,6 +68,7 @@ type deviceState struct {
 	queue       vk.Queue
 	queueFamily uint32
 	memory      vk.PhysicalDeviceMemoryProperties
+	ops         deviceOps
 }
 
 type deviceChild interface {
@@ -145,7 +148,7 @@ func Open() (*Device, error) {
 }
 
 func openWithHooks(hooks openHooks) (_ *Device, err error) {
-	state := &deviceState{hooks: hooks}
+	state := &deviceState{hooks: hooks, ops: directDeviceOps}
 	complete := false
 	defer func() {
 		if !complete {
@@ -249,12 +252,14 @@ func openWithHooks(hooks openHooks) (_ *Device, err error) {
 	state.memory = hooks.memoryProperties(state.instanceFns, state.physical)
 	properties := hooks.deviceProperties(state.instanceFns, state.physical)
 
-	complete = true
-	return &Device{
+	device := &Device{
 		state:     state,
 		info:      deviceInfoSnapshot(properties),
 		closeDone: make(chan struct{}),
-	}, nil
+	}
+	device.cond = sync.NewCond(&device.mu)
+	complete = true
+	return device, nil
 }
 
 // Info returns a copy of the immutable device information captured by Open.
@@ -263,6 +268,9 @@ func (d *Device) Info() DeviceInfo {
 		return DeviceInfo{}
 	}
 	d.mu.Lock()
+	if d.cond == nil {
+		d.cond = sync.NewCond(&d.mu)
+	}
 	defer d.mu.Unlock()
 	return d.info
 }
@@ -293,6 +301,9 @@ func (d *Device) Close() error {
 		return err
 	}
 	d.closing = true
+	for d.active > 0 {
+		d.cond.Wait()
+	}
 	children := append([]childRecord(nil), d.children...)
 	state := d.state
 	d.mu.Unlock()
@@ -324,6 +335,36 @@ func (d *Device) Close() error {
 	close(d.closeDone)
 	d.mu.Unlock()
 	return closeErr
+}
+
+func (d *Device) beginOperation() (*deviceState, error) {
+	if d == nil {
+		return nil, fmt.Errorf("vulki: device is closed")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cond == nil {
+		d.cond = sync.NewCond(&d.mu)
+	}
+	if d.state == nil || d.closing || d.closed {
+		return nil, fmt.Errorf("vulki: device is closed")
+	}
+	d.active++
+	return d.state, nil
+}
+
+func (d *Device) endOperation() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	if d.active > 0 {
+		d.active--
+	}
+	if d.active == 0 && d.cond != nil {
+		d.cond.Broadcast()
+	}
+	d.mu.Unlock()
 }
 
 func (d *Device) addChild(child deviceChild) (uint64, error) {

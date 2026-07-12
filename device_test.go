@@ -3,6 +3,7 @@ package vulki
 import (
 	"errors"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/srlehn/vulki/vk"
@@ -160,6 +161,45 @@ func TestZeroDeviceIsClosedAndSafe(t *testing.T) {
 	}
 	if info := (*Device)(nil).Info(); info != (DeviceInfo{}) {
 		t.Fatalf("nil Device.Info = %#v", info)
+	}
+}
+
+func TestDeviceCloseWaitsForActiveOperation(t *testing.T) {
+	var cleanup []string
+	device, err := openWithHooks(fakeOpenHooks("", nil, &cleanup))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := device.beginOperation(); err != nil {
+		t.Fatalf("begin operation: %v", err)
+	}
+
+	closed := make(chan error, 1)
+	go func() {
+		closed <- device.Close()
+	}()
+	for {
+		device.mu.Lock()
+		closing := device.closing
+		device.mu.Unlock()
+		if closing {
+			break
+		}
+		runtime.Gosched()
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned during active operation: %v", err)
+	default:
+	}
+
+	device.endOperation()
+	if err := <-closed; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	want := []string{"wait", "device", "instance", "loader"}
+	if !reflect.DeepEqual(cleanup, want) {
+		t.Fatalf("cleanup = %v, want %v", cleanup, want)
 	}
 }
 
