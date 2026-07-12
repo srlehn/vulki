@@ -3,10 +3,10 @@ package imgproc
 import (
 	_ "embed"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"math"
-	"unsafe"
 
 	"github.com/srlehn/vulki/compute"
 	"github.com/srlehn/vulki/shader"
@@ -21,6 +21,9 @@ var bilinearWarpGrayWGSL string
 
 //go:embed shaders/peak_find.wgsl
 var peakFindWGSL string
+
+//go:embed shaders/peak_finalize.wgsl
+var peakFinalizeWGSL string
 
 //go:embed shaders/fft_bitrev.wgsl
 var fftBitrevWGSL string
@@ -45,11 +48,21 @@ var crosspowerWGSL string
 
 // Result holds the recovered rotation, scale, and translation.
 type Result struct {
-	Angle float64 // degrees
-	Scale float64 // multiplier
-	Tx    float64 // translation in pixels (x)
-	Ty    float64 // translation in pixels (y)
+	Angle                 float64 // degrees
+	Scale                 float64 // multiplier
+	Tx                    float64 // translation in pixels (x)
+	Ty                    float64 // translation in pixels (y)
+	RotationConfidence    float64 // normalized log-polar IFFT peak
+	TranslationConfidence float64 // normalized translation IFFT peak
 }
+
+// ErrLowConfidence indicates that at least one phase-correlation peak did not
+// meet the validity threshold described by Reddy and Chatterji.
+var ErrLowConfidence = errors.New("imgproc: phase-correlation match confidence is too low")
+
+const minimumMatchConfidence = 0.03
+
+const maxExactFloat32Index = 1 << 24
 
 // Correlator performs log-polar phase correlation on the GPU.
 type Correlator struct {
@@ -66,6 +79,7 @@ type Correlator struct {
 	spirvGrayPad    []byte
 	spirvWarpGray   []byte
 	spirvPeakFind   []byte
+	spirvPeakFinal  []byte
 	spirvBitrev     []byte
 	spirvButterfly  []byte
 	spirvMagnitude  []byte
@@ -98,17 +112,41 @@ type Correlator struct {
 	pipeCrosspowerLP                   *compute.Pipeline
 	pipeCrosspowerTrans                *compute.Pipeline
 	pipePeakFind                       *compute.Pipeline
+	pipePeakFinal                      *compute.Pipeline
 
 	allPipelines []*compute.Pipeline
 }
 
 // NewCorrelator creates a Correlator for images up to maxW x maxH pixels.
 func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
+	if ctx == nil || ctx.DevFuncs == nil || ctx.Device == 0 {
+		return nil, fmt.Errorf("imgproc: invalid compute context")
+	}
+	if maxW < 2 || maxH < 2 {
+		return nil, fmt.Errorf("imgproc: maximum dimensions must both be at least 2 pixels")
+	}
+	if uint64(maxW) > math.MaxUint32 || uint64(maxH) > math.MaxUint32 {
+		return nil, fmt.Errorf("imgproc: maximum dimensions exceed shader limits")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if maxW > maxInt/maxH {
+		return nil, fmt.Errorf("imgproc: maximum image area overflows int")
+	}
+	if uint64(maxW)*uint64(maxH) > math.MaxUint32 {
+		return nil, fmt.Errorf("imgproc: maximum image area exceeds shader indexing limits")
+	}
+
 	c := &Correlator{ctx: ctx, maxW: maxW, maxH: maxH}
 
 	// Square crop + minimal padding: crop to min(w,h) then pad to next power of 2.
 	// This preserves spectral symmetry and avoids excessive zero-padding.
-	padSize := nextPow2(min(maxW, maxH))
+	padSize, ok := nextPow2Checked(min(maxW, maxH))
+	if !ok || padSize > maxInt/padSize {
+		return nil, fmt.Errorf("imgproc: padded image area overflows int")
+	}
+	if uint64(padSize)*uint64(padSize) > maxExactFloat32Index {
+		return nil, fmt.Errorf("imgproc: padded image area exceeds peak-index precision limit")
+	}
 	c.w = padSize
 	c.h = padSize
 	c.lpW = c.w
@@ -127,6 +165,7 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 		{&c.spirvGrayPad, grayscalePadWGSL, "grayscale_pad"},
 		{&c.spirvWarpGray, bilinearWarpGrayWGSL, "bilinear_warp_gray"},
 		{&c.spirvPeakFind, peakFindWGSL, "peak_find"},
+		{&c.spirvPeakFinal, peakFinalizeWGSL, "peak_finalize"},
 		{&c.spirvBitrev, fftBitrevWGSL, "fft_bitrev"},
 		{&c.spirvButterfly, fftButterflyWGSL, "fft_butterfly"},
 		{&c.spirvMagnitude, magnitudeWGSL, "magnitude"},
@@ -199,10 +238,10 @@ func NewCorrelator(ctx *compute.Context, maxW, maxH int) (*Correlator, error) {
 	}
 
 	// Result buffer: 16 x float32 = 64 bytes.
-	// Layout: [0] rawPeakX [1] rawPeakY [2] angle_deg [3] scale
+	// Layout: [0] rotation confidence [1] rawPeakY [2] angle_deg [3] scale
 	//         [4] cos(angle) [5] sin(angle) [6] -cos(angle) [7] -sin(angle)
-	//         [8] tx1 [9] ty1 [10] mag1 [11] pad
-	//         [12] tx2 [13] ty2 [14] mag2 [15] pad
+	//         [8] tx1 [9] ty1 [10] confidence1 [11] peak-scan scratch
+	//         [12] tx2 [13] ty2 [14] confidence2 [15] peak-scan scratch
 	c.result, err = compute.NewTypedBuffer[float32](ctx, 16, usage)
 	if err != nil {
 		c.Close()
@@ -405,15 +444,56 @@ func (c *Correlator) createPipelines() error {
 	if err != nil {
 		return err
 	}
+	c.pipePeakFinal, err = mk(c.spirvPeakFinal, []compute.BufferBinding{
+		bb(0, c.crossPow.Buf), bb(1, c.result.Buf), bb(2, paramBuf),
+	})
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
 
-// uploadRGBA uploads raw RGBA pixel data to the GPU buffer.
-func uploadRGBA(ctx *compute.Context, buf *compute.TypedBuffer[uint32], img *image.RGBA) error {
-	pix := img.Pix
-	// Upload raw bytes (reinterpreted as packed RGBA u32 on GPU).
-	return buf.Buf.Upload(ctx, pix)
+// packRGBA copies an image into a tightly packed row-major pixel buffer. The
+// copy is required because RGBA subimages can have non-zero bounds and a stride
+// inherited from a larger parent image.
+func packRGBA(img *image.RGBA) ([]uint32, error) {
+	if img == nil {
+		return nil, fmt.Errorf("imgproc: nil RGBA image")
+	}
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("imgproc: RGBA image must have non-empty bounds")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if w > maxInt/4 || w > maxInt/h {
+		return nil, fmt.Errorf("imgproc: RGBA image dimensions overflow int")
+	}
+	rowBytes := w * 4
+	if img.Stride < rowBytes {
+		return nil, fmt.Errorf("imgproc: RGBA stride %d is smaller than row size %d", img.Stride, rowBytes)
+	}
+	if h-1 > (maxInt-rowBytes)/img.Stride {
+		return nil, fmt.Errorf("imgproc: RGBA layout overflows int")
+	}
+	required := (h-1)*img.Stride + rowBytes
+	if len(img.Pix) < required {
+		return nil, fmt.Errorf("imgproc: RGBA pixel data has %d bytes, need %d", len(img.Pix), required)
+	}
+
+	pixels := make([]uint32, w*h)
+	for y := 0; y < h; y++ {
+		row := img.Pix[y*img.Stride : y*img.Stride+rowBytes]
+		for x := 0; x < w; x++ {
+			off := x * 4
+			pixels[y*w+x] = uint32(row[off]) |
+				uint32(row[off+1])<<8 |
+				uint32(row[off+2])<<16 |
+				uint32(row[off+3])<<24
+		}
+	}
+	return pixels, nil
 }
 
 // PhaseCorrelate recovers rotation, scale, and translation between two images.
@@ -423,12 +503,37 @@ func uploadRGBA(ctx *compute.Context, buf *compute.TypedBuffer[uint32], img *ima
 //	Phase 2: transform image A by detected angle/scale, phase correlate with B for translation
 //	         Try both angle and angle+180° (magnitude spectrum has 180° symmetry), pick higher peak.
 //
-// Uploads raw RGBA pixels once per image, runs entire pipeline on GPU,
+// Uploads packed RGBA pixels once per image, runs the entire pipeline on GPU,
 // downloads only 64 bytes of results.
 func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
+	if c == nil || c.ctx == nil {
+		return nil, fmt.Errorf("imgproc: invalid correlator")
+	}
+	if imgA == nil || imgB == nil {
+		return nil, fmt.Errorf("imgproc: input images must not be nil")
+	}
+	wA, hA := imgA.Bounds().Dx(), imgA.Bounds().Dy()
+	wB, hB := imgB.Bounds().Dx(), imgB.Bounds().Dy()
+	if wA != wB || hA != hB {
+		return nil, fmt.Errorf("imgproc: input images must have equal dimensions, got %dx%d and %dx%d", wA, hA, wB, hB)
+	}
+	if wA < 2 || hA < 2 {
+		return nil, fmt.Errorf("imgproc: input dimensions must both be at least 2 pixels")
+	}
+	if wA > c.maxW || hA > c.maxH {
+		return nil, fmt.Errorf("imgproc: input dimensions %dx%d exceed correlator maximum %dx%d", wA, hA, c.maxW, c.maxH)
+	}
+	pixelsA, err := packRGBA(imgA)
+	if err != nil {
+		return nil, fmt.Errorf("imgproc: image A: %w", err)
+	}
+	pixelsB, err := packRGBA(imgB)
+	if err != nil {
+		return nil, fmt.Errorf("imgproc: image B: %w", err)
+	}
+
 	// Determine square crop size from the smaller dimension of each image.
-	cropSize := min(imgA.Bounds().Dx(), imgA.Bounds().Dy(),
-		imgB.Bounds().Dx(), imgB.Bounds().Dy())
+	cropSize := min(wA, hA)
 
 	wgSize := uint32(64)
 	n := uint32(c.w * c.h)
@@ -436,20 +541,20 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	paramsBuf := c.params.DeviceBuffer
 
 	// Image dimensions for params.
-	srcWA := uint32(imgA.Bounds().Dx())
-	srcHA := uint32(imgA.Bounds().Dy())
-	srcStrideA := uint32(imgA.Stride / 4) // stride in pixels
-	srcWB := uint32(imgB.Bounds().Dx())
-	srcHB := uint32(imgB.Bounds().Dy())
-	srcStrideB := uint32(imgB.Stride / 4)
+	srcWA := uint32(wA)
+	srcHA := uint32(hA)
+	srcStrideA := srcWA
+	srcWB := uint32(wB)
+	srcHB := uint32(hB)
+	srcStrideB := srcWB
 	padSize := uint32(c.w)
 	cropU32 := uint32(cropSize)
 
-	// ---- Upload raw RGBA pixels (once) ----
-	if err := uploadRGBA(c.ctx, c.rgbaA, imgA); err != nil {
+	// ---- Upload tightly packed RGBA pixels (once) ----
+	if err := c.rgbaA.UploadSlice(c.ctx, pixelsA); err != nil {
 		return nil, fmt.Errorf("imgproc: upload imgA: %w", err)
 	}
-	if err := uploadRGBA(c.ctx, c.rgbaB, imgB); err != nil {
+	if err := c.rgbaB.UploadSlice(c.ctx, pixelsB); err != nil {
 		return nil, fmt.Errorf("imgproc: upload imgB: %w", err)
 	}
 
@@ -548,62 +653,17 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	// IFFT2D on cross-power result.
 	recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.lpW, c.lpH, true)
 
-	// Peak find (logpolar mode): find peak in IFFT result, convert to angle/scale.
-	// Writes result[0..7]: rawPeakX, rawPeakY, angle_deg, scale, cos, sin, -cos, -sin.
+	// Peak find (logpolar mode): find the IFFT peak, then convert it to
+	// confidence, angle, scale, and the two rotation candidates in result[0..7].
 	peakLPParams := encodePeakFindParams(uint32(c.lpW), uint32(c.lpH), 0, 0, logRmax)
 	rec.UpdateBuffer(paramsBuf, 0, peakLPParams)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipePeakFind)
-	rec.Dispatch(1, 1, 1) // single workgroup of 256 threads
+	rec.Dispatch(1, 1, 1)
 	rec.Barrier(c.result.Buf.DeviceBuffer)
-
-	// DEBUG: submit Phase 1 and verify peak_find vs CPU.
-	if err := rec.Submit(); err != nil {
-		return nil, fmt.Errorf("imgproc: phase1: %w", err)
-	}
-	{
-		cpData, err := c.crossPow.DownloadSlice(c.ctx)
-		if err != nil {
-			return nil, err
-		}
-		// CPU peak finding on the same IFFT data (unnormalized).
-		maxVal := float64(0)
-		maxX, maxY := 0, 0
-		for y := 0; y < c.lpH; y++ {
-			for x := 0; x < c.lpW; x++ {
-				cv := cpData[y*c.lpW+x]
-				mag := math.Sqrt(float64(cv[0]*cv[0] + cv[1]*cv[1]))
-				if mag > maxVal {
-					maxVal = mag
-					maxX = x
-					maxY = y
-				}
-			}
-		}
-		// Also check DC magnitude.
-		dc := cpData[0]
-		dcMag := math.Sqrt(float64(dc[0]*dc[0] + dc[1]*dc[1]))
-		fmt.Printf("DEBUG CPU peak: (%d, %d) mag=%f  DC mag=%f  ratio=%.1f\n",
-			maxX, maxY, maxVal, dcMag, maxVal/dcMag)
-		// Check what GPU peak_find returned.
-		gpuRes, err := c.result.DownloadSlice(c.ctx)
-		if err != nil {
-			return nil, err
-		}
-		fmt.Printf("DEBUG GPU peak_find: rawPeak=(%f, %f) angle=%f scale=%f\n",
-			gpuRes[0], gpuRes[1], gpuRes[2], gpuRes[3])
-		fmt.Printf("DEBUG GPU peak_find: cos=%f sin=%f -cos=%f -sin=%f\n",
-			gpuRes[4], gpuRes[5], gpuRes[6], gpuRes[7])
-		fmt.Printf("DEBUG GPU pre-reduction: bestLocalMag=%f bestLocalIdx=%d\n",
-			gpuRes[11], int(gpuRes[15]))
-		fmt.Printf("DEBUG GPU post-reduction: bestMag=%f maxIdx=%d (from rawPeakXY)\n",
-			math.Sqrt(float64(gpuRes[0]*gpuRes[0]+gpuRes[1]*gpuRes[1])),
-			-1) // can't easily extract from wrapped peak coords
-	}
-	rec, err = c.ctx.NewCommandRecorder()
-	if err != nil {
-		return nil, err
-	}
+	rec.Bind(c.pipePeakFinal)
+	rec.Dispatch(1, 1, 1)
+	rec.Barrier(c.result.Buf.DeviceBuffer)
 
 	// ==== Phase 2 Try 1: Translation (angle θ₀) ====
 	// Per paper §III end: "the image with the highest resolution is scaled and
@@ -637,11 +697,14 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Barrier(c.crossPow.Buf.DeviceBuffer)
 	recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.w, c.h, true)
 
-	// Peak find (translation mode, offset=8) → result[8..10]: tx1, ty1, mag1.
+	// Peak find (translation mode, offset=8): result[8..10] is tx1, ty1, confidence1.
 	peakT1Params := encodePeakFindParams(uint32(c.w), uint32(c.h), 1, 8, 0)
 	rec.UpdateBuffer(paramsBuf, 0, peakT1Params)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipePeakFind)
+	rec.Dispatch(1, 1, 1)
+	rec.Barrier(c.result.Buf.DeviceBuffer)
+	rec.Bind(c.pipePeakFinal)
 	rec.Dispatch(1, 1, 1)
 	rec.Barrier(c.result.Buf.DeviceBuffer)
 
@@ -674,11 +737,14 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	rec.Barrier(c.crossPow.Buf.DeviceBuffer)
 	recordFFT2D(rec, c.crossPow.Buf.DeviceBuffer, paramsBuf, c.pipeBitrevCP, c.pipeButterflyCP, c.w, c.h, true)
 
-	// Peak find (translation mode, offset=12) → result[12..14]: tx2, ty2, mag2.
+	// Peak find (translation mode, offset=12): result[12..14] is tx2, ty2, confidence2.
 	peakT2Params := encodePeakFindParams(uint32(c.w), uint32(c.h), 1, 12, 0)
 	rec.UpdateBuffer(paramsBuf, 0, peakT2Params)
 	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(c.pipePeakFind)
+	rec.Dispatch(1, 1, 1)
+	rec.Barrier(c.result.Buf.DeviceBuffer)
+	rec.Bind(c.pipePeakFinal)
 	rec.Dispatch(1, 1, 1)
 	rec.Barrier(c.result.Buf.DeviceBuffer)
 
@@ -694,22 +760,25 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	}
 
 	// Parse results.
-	rawPeakX := float64(res[0])
-	rawPeakY := float64(res[1])
 	angleDeg := float64(res[2])
 	scale := float64(res[3])
+	rotationConfidence := float64(res[0])
 	tx1 := float64(res[8])
 	ty1 := float64(res[9])
-	mag1 := float64(res[10])
+	confidence1 := float64(res[10])
 	tx2 := float64(res[12])
 	ty2 := float64(res[13])
-	mag2 := float64(res[14])
+	confidence2 := float64(res[14])
 
-	fmt.Printf("DEBUG: raw peak (%f, %f) lpW=%d lpH=%d maxR=%.2f cropSize=%d\n",
-		rawPeakX, rawPeakY, c.lpW, c.lpH, maxRadius, cropSize)
-	fmt.Printf("DEBUG: angle=%.2f° scale=%.4f\n", angleDeg, scale)
-	fmt.Printf("DEBUG: translation try1 (%.2f, %.2f) mag=%f\n", tx1, ty1, mag1)
-	fmt.Printf("DEBUG: translation try2 (%.2f, %.2f) mag=%f\n", tx2, ty2, mag2)
+	if math.IsNaN(angleDeg) || math.IsInf(angleDeg, 0) ||
+		math.IsNaN(scale) || math.IsInf(scale, 0) || scale <= 0 ||
+		math.IsNaN(rotationConfidence) || math.IsInf(rotationConfidence, 0) ||
+		math.IsNaN(tx1) || math.IsInf(tx1, 0) || math.IsNaN(ty1) || math.IsInf(ty1, 0) ||
+		math.IsNaN(tx2) || math.IsInf(tx2, 0) || math.IsNaN(ty2) || math.IsInf(ty2, 0) ||
+		math.IsNaN(confidence1) || math.IsInf(confidence1, 0) ||
+		math.IsNaN(confidence2) || math.IsInf(confidence2, 0) {
+		return nil, fmt.Errorf("imgproc: GPU pipeline returned a non-finite transform")
+	}
 
 	// Disambiguate: pick the 180° variant with higher peak magnitude.
 	// Paper p. 1268: "If the value of the peak of the IFFT of the cross-power
@@ -717,18 +786,24 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	// rotation is θ₀, otherwise (180° + θ₀) is the true angle of rotation."
 	bestAngle := angleDeg
 	bestTx, bestTy := tx1, ty1
-	if mag2 > mag1 {
+	translationConfidence := confidence1
+	if confidence2 > confidence1 {
 		bestAngle = angleDeg + 180
 		bestTx, bestTy = tx2, ty2
+		translationConfidence = confidence2
+	}
+	if rotationConfidence <= minimumMatchConfidence || translationConfidence <= minimumMatchConfidence {
+		return nil, fmt.Errorf("%w: rotation %.5f, translation %.5f, minimum %.2f",
+			ErrLowConfidence, rotationConfidence, translationConfidence, minimumMatchConfidence)
 	}
 
-	fmt.Printf("DEBUG: chose angle=%.2f° (peak1=%f peak2=%f)\n", bestAngle, mag1, mag2)
-
 	return &Result{
-		Angle: bestAngle,
-		Scale: scale,
-		Tx:    bestTx,
-		Ty:    bestTy,
+		Angle:                 bestAngle,
+		Scale:                 scale,
+		Tx:                    bestTx,
+		Ty:                    bestTy,
+		RotationConfidence:    rotationConfidence,
+		TranslationConfidence: translationConfidence,
 	}, nil
 }
 
@@ -770,14 +845,6 @@ func (c *Correlator) Close() {
 	if c.params != nil {
 		c.params.Destroy(c.ctx)
 	}
-}
-
-// pixToU32 reinterprets RGBA pixel bytes as packed uint32 without copying.
-func pixToU32(pix []byte) []uint32 {
-	if len(pix) == 0 {
-		return nil
-	}
-	return unsafe.Slice((*uint32)(unsafe.Pointer(&pix[0])), len(pix)/4)
 }
 
 // encodeGrayPadParams encodes parameters for the grayscale_pad shader.

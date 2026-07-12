@@ -1,6 +1,7 @@
 package imgproc
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -245,7 +246,16 @@ func TestMagnitude(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expected := []float64{5, 1, 1, 0, 5, math.Sqrt(2), 13, math.Sqrt(2)}
+	expected := []float64{
+		math.Log1p(5),
+		math.Log1p(1),
+		math.Log1p(1),
+		0,
+		math.Log1p(5),
+		math.Log1p(math.Sqrt(2)),
+		math.Log1p(13),
+		math.Log1p(math.Sqrt(2)),
+	}
 	for i, want := range expected {
 		if math.Abs(float64(output[i])-want) > 1e-4 {
 			t.Errorf("mag[%d] = %v, want %v", i, output[i], want)
@@ -305,30 +315,16 @@ func TestHighpass(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// At (0,0): hx = 1 - cos(0) = 0, so output should be 0.
-	if output[0] != 0 {
-		t.Errorf("highpass[0,0] = %v, want 0 (DC should be zeroed)", output[0])
-	}
-
-	// At (0, y) for any y: hx = 0, so output should be 0.
+	// Verify the paper's H(xi,eta) = (1-X)(2-X), where
+	// X = cos(pi*xi)cos(pi*eta) and the shifted DC is at the center.
 	for y := 0; y < h; y++ {
-		if output[y*w] != 0 {
-			t.Errorf("highpass[0,%d] = %v, want 0 (DC column)", y, output[y*w])
-		}
-	}
-
-	// At (x, 0) for any x: hy = 0, so output should be 0.
-	for x := 0; x < w; x++ {
-		if output[x] != 0 {
-			t.Errorf("highpass[%d,0] = %v, want 0 (DC row)", x, output[x])
-		}
-	}
-
-	// Non-DC locations should be non-zero.
-	for y := 1; y < h; y++ {
-		for x := 1; x < w; x++ {
-			if output[y*w+x] == 0 {
-				t.Errorf("highpass[%d,%d] = 0, want non-zero", x, y)
+		eta := float64(y)/float64(h) - 0.5
+		for x := 0; x < w; x++ {
+			xi := float64(x)/float64(w) - 0.5
+			spectralX := math.Cos(math.Pi*xi) * math.Cos(math.Pi*eta)
+			want := (1 - spectralX) * (2 - spectralX)
+			if math.Abs(float64(output[y*w+x])-want) > 1e-5 {
+				t.Errorf("highpass[%d,%d] = %v, want %v", x, y, output[y*w+x], want)
 			}
 		}
 	}
@@ -391,7 +387,7 @@ func TestCrosspower_IdenticalSignals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	params := encodeU32Params(uint32(n))
+	params := encodeU32Params(uint32(n), 1)
 	rec.UpdateBuffer(paramsBuf.DeviceBuffer, 0, params)
 	rec.BarrierTransferToCompute(paramsBuf.DeviceBuffer)
 	rec.Bind(pipe)
@@ -410,6 +406,67 @@ func TestCrosspower_IdenticalSignals(t *testing.T) {
 		if math.Abs(float64(output[i][0])-1) > 1e-3 || math.Abs(float64(output[i][1])) > 1e-3 {
 			t.Errorf("crosspower[%d] = (%v, %v), want (1, 0)", i, output[i][0], output[i][1])
 		}
+	}
+}
+
+func TestPeakFind_KnownLocation(t *testing.T) {
+	ctx := testContext(t)
+
+	const w, h = 16, 16
+	usage := uint32(vk.BufferUsageStorageBufferBit)
+	input, err := compute.NewTypedBuffer[[2]float32](ctx, w*h, usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Destroy(ctx)
+	result, err := compute.NewTypedBuffer[float32](ctx, 16, usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Destroy(ctx)
+	params, err := ctx.CreateBuffer(32, usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer params.Destroy(ctx)
+
+	values := make([][2]float32, w*h)
+	values[7*w+5] = [2]float32{100, 0}
+	if err := input.UploadSlice(ctx, values); err != nil {
+		t.Fatal(err)
+	}
+	if err := params.Upload(ctx, encodePeakFindParams(w, h, 1, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	pipe := compilePipeline(t, ctx, peakFindWGSL, []compute.BufferBinding{
+		bb(0, input.Buf), bb(1, result.Buf), bb(2, params),
+	})
+	finalizePipe := compilePipeline(t, ctx, peakFinalizeWGSL, []compute.BufferBinding{
+		bb(0, input.Buf), bb(1, result.Buf), bb(2, params),
+	})
+
+	rec, err := ctx.NewCommandRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Bind(pipe)
+	rec.Dispatch(1, 1, 1)
+	rec.Barrier(result.Buf.DeviceBuffer)
+	rec.Bind(finalizePipe)
+	rec.Dispatch(1, 1, 1)
+	if err := rec.Submit(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := result.DownloadSlice(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(float64(got[0])+5) > 1e-4 || math.Abs(float64(got[1])+7) > 1e-4 {
+		t.Fatalf("peak translation = (%v,%v), want (-5,-7); scratch magnitude=%v index=%v", got[0], got[1], got[11], got[15])
+	}
+	wantMagnitude := 100.0 / float64(w*h)
+	if math.Abs(float64(got[2])-wantMagnitude) > 1e-4 {
+		t.Fatalf("peak magnitude = %v, want %v", got[2], wantMagnitude)
 	}
 }
 
@@ -479,7 +536,7 @@ func TestCrosspower_IFFT_PeaksAtOrigin(t *testing.T) {
 	recordFFT2D(rec, bBuf.Buf.DeviceBuffer, paramsBuf.DeviceBuffer, bitrevB, butterflyB, w, h, false)
 
 	// Cross-power.
-	cpParams := encodeU32Params(uint32(n))
+	cpParams := encodeU32Params(uint32(n), 1)
 	rec.UpdateBuffer(paramsBuf.DeviceBuffer, 0, cpParams)
 	rec.BarrierTransferToCompute(paramsBuf.DeviceBuffer)
 	rec.Bind(cpPipe)
@@ -587,7 +644,7 @@ func TestPhaseCorrelation_KnownTranslation(t *testing.T) {
 	recordFFT2D(rec, aBuf.Buf.DeviceBuffer, paramsBuf.DeviceBuffer, bitrevA, butterflyA, w, h, false)
 	recordFFT2D(rec, bBuf.Buf.DeviceBuffer, paramsBuf.DeviceBuffer, bitrevB, butterflyB, w, h, false)
 
-	cpParams := encodeU32Params(uint32(n))
+	cpParams := encodeU32Params(uint32(n), 1)
 	rec.UpdateBuffer(paramsBuf.DeviceBuffer, 0, cpParams)
 	rec.BarrierTransferToCompute(paramsBuf.DeviceBuffer)
 	rec.Bind(cpPipe)
@@ -734,276 +791,39 @@ func TestLogPolar_SamplesFromDC(t *testing.T) {
 func TestPhase1_RotationDetection(t *testing.T) {
 	ctx := testContext(t)
 
-	// Load real images.
 	imgA := loadTestImage(t, "../testdata/snake.png")
-	imgB := loadTestImage(t, "../testdata/snake_rot_12deg.png")
-
-	maxW := imgA.Bounds().Dx()
-	maxH := imgA.Bounds().Dy()
-
-	corr, err := NewCorrelator(ctx, maxW, maxH)
+	imgB := BilinearWarp(imgA, -12, 1)
+	if fixture := os.Getenv("VULKI_ROTATION_FIXTURE"); fixture != "" {
+		imgB = loadTestImage(t, fixture)
+	}
+	corr, err := NewCorrelator(ctx, imgA.Bounds().Dx(), imgA.Bounds().Dy())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer corr.Close()
 
-	// Run Phase 1 manually and dump intermediates.
-	wgSize := uint32(64)
-	n := uint32(corr.w * corr.h)
-	groups := (n + wgSize - 1) / wgSize
-	paramsBuf := corr.params.DeviceBuffer
-
-	// Upload images.
-	pixA := padImageToRGBA(imgA, corr.w, corr.h)
-	pixB := padImageToRGBA(imgB, corr.w, corr.h)
-	if err := corr.rgbaA.UploadSlice(ctx, pixA); err != nil {
-		t.Fatal(err)
-	}
-	if err := corr.rgbaB.UploadSlice(ctx, pixB); err != nil {
-		t.Fatal(err)
-	}
-
-	whParams := encodeU32Params(uint32(corr.w), uint32(corr.h))
-
-	// Grayscale + Hann.
-	rec, err := ctx.NewCommandRecorder()
+	result, err := corr.PhaseCorrelate(imgA, imgB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec.UpdateBuffer(paramsBuf, 0, whParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	rec.Bind(corr.pipeGrayscaleA)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(corr.grayA.Buf.DeviceBuffer)
-	rec.Bind(corr.pipeGrayscaleB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(corr.grayB.Buf.DeviceBuffer)
-	rec.Bind(corr.pipeHannA)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(corr.grayA.Buf.DeviceBuffer)
-	rec.Bind(corr.pipeHannB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(corr.grayB.Buf.DeviceBuffer)
-	if err := rec.Submit(); err != nil {
-		t.Fatal(err)
+	t.Logf("registration result: angle=%.3f scale=%.5f translation=(%.3f, %.3f)",
+		result.Angle, result.Scale, result.Tx, result.Ty)
+
+	angleDelta := math.Mod(result.Angle-12+180, 360) - 180
+	if math.Abs(angleDelta) > 2 {
+		t.Errorf("angle = %v degrees, want about 12 degrees", result.Angle)
+	}
+	if math.Abs(result.Scale-1) > 0.1 {
+		t.Errorf("scale = %v, want about 1", result.Scale)
+	}
+	if result.RotationConfidence <= minimumMatchConfidence || result.TranslationConfidence <= minimumMatchConfidence {
+		t.Errorf("unexpected confidence: rotation=%v translation=%v",
+			result.RotationConfidence, result.TranslationConfidence)
 	}
 
-	grayAData, err := corr.grayA.DownloadSlice(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	grayBData, err := corr.grayB.DownloadSlice(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Check grayscale differences.
-	grayDiff := float64(0)
-	for i := range grayAData {
-		d := math.Abs(float64(grayAData[i] - grayBData[i]))
-		if d > grayDiff {
-			grayDiff = d
-		}
-	}
-	t.Logf("Max grayscale diff (A vs B): %v", grayDiff)
-
-	// FFT.
-	if err := corr.complexA.UploadSlice(ctx, realToComplex(grayAData)); err != nil {
-		t.Fatal(err)
-	}
-	if err := corr.complexB.UploadSlice(ctx, realToComplex(grayBData)); err != nil {
-		t.Fatal(err)
-	}
-
-	rec, err = ctx.NewCommandRecorder()
-	if err != nil {
-		t.Fatal(err)
-	}
-	recordFFT2D(rec, corr.complexA.Buf.DeviceBuffer, paramsBuf, corr.pipeBitrevA, corr.pipeButterflyA, corr.w, corr.h, false)
-	recordFFT2D(rec, corr.complexB.Buf.DeviceBuffer, paramsBuf, corr.pipeBitrevB, corr.pipeButterflyB, corr.w, corr.h, false)
-
-	// Magnitude.
-	magParams := encodeU32Params(n)
-	rec.UpdateBuffer(paramsBuf, 0, magParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	rec.Bind(corr.pipeMagA)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(corr.magA.Buf.DeviceBuffer)
-	rec.Bind(corr.pipeMagB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(corr.magB.Buf.DeviceBuffer)
-
-	// Highpass.
-	rec.UpdateBuffer(paramsBuf, 0, whParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	rec.Bind(corr.pipeHighpassA)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(corr.magA.Buf.DeviceBuffer)
-	rec.Bind(corr.pipeHighpassB)
-	rec.Dispatch(groups, 1, 1)
-	rec.Barrier(corr.magB.Buf.DeviceBuffer)
-
-	// Log-polar.
-	maxRadius := math.Sqrt(float64(corr.w*corr.w+corr.h*corr.h)) / 2.0
-	logRmax := float32(math.Log(maxRadius))
-	lpParams := encodeLogPolarParams(uint32(corr.w), uint32(corr.h), uint32(corr.lpW), uint32(corr.lpH), logRmax)
-	rec.UpdateBuffer(paramsBuf, 0, lpParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	lpN := uint32(corr.lpW * corr.lpH)
-	lpGroups := (lpN + wgSize - 1) / wgSize
-	rec.Bind(corr.pipeLogPolA)
-	rec.Dispatch(lpGroups, 1, 1)
-	rec.Barrier(corr.logPolA.Buf.DeviceBuffer)
-	rec.Bind(corr.pipeLogPolB)
-	rec.Dispatch(lpGroups, 1, 1)
-	rec.Barrier(corr.logPolB.Buf.DeviceBuffer)
-
-	if err := rec.Submit(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Download magnitude spectra.
-	magAData, err := corr.magA.DownloadSlice(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	magBData, err := corr.magB.DownloadSlice(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Dump some mag stats.
-	magAMax, magBMax := float32(0), float32(0)
-	magASum, magBSum := float64(0), float64(0)
-	for i := range magAData {
-		if magAData[i] > magAMax {
-			magAMax = magAData[i]
-		}
-		if magBData[i] > magBMax {
-			magBMax = magBData[i]
-		}
-		magASum += float64(magAData[i])
-		magBSum += float64(magBData[i])
-	}
-	t.Logf("Magnitude A: max=%v, sum=%v", magAMax, magASum)
-	t.Logf("Magnitude B: max=%v, sum=%v", magBMax, magBSum)
-
-	// Download log-polar images.
-	lpAData, err := corr.logPolA.DownloadSlice(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lpBData, err := corr.logPolB.DownloadSlice(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Stats on log-polar.
-	lpAMax, lpBMax := float32(0), float32(0)
-	lpANonzero, lpBNonzero := 0, 0
-	lpDiffMax := float32(0)
-	for i := range lpAData {
-		a := lpAData[i][0]
-		b := lpBData[i][0]
-		if a > lpAMax {
-			lpAMax = a
-		}
-		if b > lpBMax {
-			lpBMax = b
-		}
-		if a != 0 {
-			lpANonzero++
-		}
-		if b != 0 {
-			lpBNonzero++
-		}
-		d := float32(math.Abs(float64(a - b)))
-		if d > lpDiffMax {
-			lpDiffMax = d
-		}
-	}
-	t.Logf("Log-polar A: max=%v, nonzero=%d/%d", lpAMax, lpANonzero, len(lpAData))
-	t.Logf("Log-polar B: max=%v, nonzero=%d/%d", lpBMax, lpBNonzero, len(lpBData))
-	t.Logf("Log-polar max diff: %v", lpDiffMax)
-	t.Logf("Log-polar dims: %dx%d", corr.lpW, corr.lpH)
-
-	// Run Phase 1 cross-power + IFFT.
-	rec, err = ctx.NewCommandRecorder()
-	if err != nil {
-		t.Fatal(err)
-	}
-	recordFFT2D(rec, corr.logPolA.Buf.DeviceBuffer, paramsBuf, corr.pipeBitrevLPA, corr.pipeButterflyLPA, corr.lpW, corr.lpH, false)
-	recordFFT2D(rec, corr.logPolB.Buf.DeviceBuffer, paramsBuf, corr.pipeBitrevLPB, corr.pipeButterflyLPB, corr.lpW, corr.lpH, false)
-
-	cpParams := encodeU32Params(lpN)
-	rec.UpdateBuffer(paramsBuf, 0, cpParams)
-	rec.BarrierTransferToCompute(paramsBuf)
-	rec.Bind(corr.pipeCrosspowerLP)
-	rec.Dispatch(lpGroups, 1, 1)
-	rec.Barrier(corr.crossPow.Buf.DeviceBuffer)
-
-	recordFFT2D(rec, corr.crossPow.Buf.DeviceBuffer, paramsBuf, corr.pipeBitrevCP, corr.pipeButterflyCP, corr.lpW, corr.lpH, true)
-
-	if err := rec.Submit(); err != nil {
-		t.Fatal(err)
-	}
-
-	cpData, err := corr.crossPow.DownloadSlice(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	normalizeComplex(cpData[:lpN], corr.lpW*corr.lpH)
-	peakX, peakY := find2DPeak(cpData[:lpN], corr.lpW, corr.lpH)
-
-	if peakX > float64(corr.lpW)/2 {
-		peakX -= float64(corr.lpW)
-	}
-	if peakY > float64(corr.lpH)/2 {
-		peakY -= float64(corr.lpH)
-	}
-
-	angle, scale := logPolarToAngleScale(peakX, peakY, corr.lpW, corr.lpH, maxRadius)
-	t.Logf("Phase 1 peak: (%v, %v)", peakX, peakY)
-	t.Logf("Angle: %v°, Scale: %v", angle, scale)
-
-	// Dump top-10 peaks in cross-power surface.
-	type peak struct {
-		x, y int
-		mag  float64
-	}
-	var peaks []peak
-	for y := 0; y < corr.lpH; y++ {
-		for x := 0; x < corr.lpW; x++ {
-			c := cpData[y*corr.lpW+x]
-			m := math.Sqrt(float64(c[0]*c[0] + c[1]*c[1]))
-			peaks = append(peaks, peak{x, y, m})
-		}
-	}
-	// Sort by magnitude descending.
-	for i := 0; i < 10 && i < len(peaks); i++ {
-		for j := i + 1; j < len(peaks); j++ {
-			if peaks[j].mag > peaks[i].mag {
-				peaks[i], peaks[j] = peaks[j], peaks[i]
-			}
-		}
-	}
-	t.Log("Top 10 correlation peaks:")
-	for i := 0; i < 10 && i < len(peaks); i++ {
-		p := peaks[i]
-		py := float64(p.y)
-		px := float64(p.x)
-		if px > float64(corr.lpW)/2 {
-			px -= float64(corr.lpW)
-		}
-		if py > float64(corr.lpH)/2 {
-			py -= float64(corr.lpH)
-		}
-		a, s := logPolarToAngleScale(px, py, corr.lpW, corr.lpH, maxRadius)
-		t.Logf("  #%d: (%d,%d) mag=%.6f → angle=%.2f° scale=%.4f", i+1, p.x, p.y, p.mag, a, s)
-	}
-
-	if math.Abs(angle-12) > 2 {
-		t.Errorf("angle = %v°, want ~12°", angle)
+	blank := image.NewRGBA(imgA.Bounds())
+	if _, err := corr.PhaseCorrelate(blank, blank); !errors.Is(err, ErrLowConfidence) {
+		t.Fatalf("blank-image error = %v, want ErrLowConfidence", err)
 	}
 }
 

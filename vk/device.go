@@ -9,48 +9,48 @@ import (
 
 // DeviceFuncs holds device-level Vulkan function pointers.
 type DeviceFuncs struct {
-	getDeviceQueue              func(device Device, queueFamilyIndex, queueIndex uint32, pQueue *Queue)
-	createBuffer                func(device Device, pCreateInfo *BufferCreateInfo, pAllocator uintptr, pBuffer *Buffer) Result
-	destroyBuffer               func(device Device, buffer Buffer, pAllocator uintptr)
-	getBufferMemoryRequirements func(device Device, buffer Buffer, pReqs *MemoryRequirements)
-	allocateMemory              func(device Device, pAllocateInfo *MemoryAllocateInfo, pAllocator uintptr, pMemory *DeviceMemory) Result
-	freeMemory                  func(device Device, memory DeviceMemory, pAllocator uintptr)
-	bindBufferMemory            func(device Device, buffer Buffer, memory DeviceMemory, offset uint64) Result
-	mapMemory                   func(device Device, memory DeviceMemory, offset, size uint64, flags uint32, ppData *unsafe.Pointer) Result
-	unmapMemory                 func(device Device, memory DeviceMemory)
-	createShaderModule          func(device Device, pCreateInfo *ShaderModuleCreateInfo, pAllocator uintptr, pModule *ShaderModule) Result
-	destroyShaderModule         func(device Device, module ShaderModule, pAllocator uintptr)
-	createDescriptorSetLayout   func(device Device, pCreateInfo *DescriptorSetLayoutCreateInfo, pAllocator uintptr, pLayout *DescriptorSetLayout) Result
-	destroyDescriptorSetLayout  func(device Device, layout DescriptorSetLayout, pAllocator uintptr)
-	createPipelineLayout        func(device Device, pCreateInfo *PipelineLayoutCreateInfo, pAllocator uintptr, pLayout *PipelineLayout) Result
-	destroyPipelineLayout       func(device Device, layout PipelineLayout, pAllocator uintptr)
-	createComputePipelines      func(device Device, pipelineCache uintptr, createInfoCount uint32, pCreateInfos *ComputePipelineCreateInfo, pAllocator uintptr, pPipelines *Pipeline) Result
-	destroyPipeline             func(device Device, pipeline Pipeline, pAllocator uintptr)
-	createDescriptorPool        func(device Device, pCreateInfo *DescriptorPoolCreateInfo, pAllocator uintptr, pPool *DescriptorPool) Result
-	destroyDescriptorPool       func(device Device, pool DescriptorPool, pAllocator uintptr)
-	allocateDescriptorSets      func(device Device, pAllocateInfo *DescriptorSetAllocateInfo, pSets *DescriptorSet) Result
-	updateDescriptorSets        func(device Device, writeCount uint32, pWrites *WriteDescriptorSet, copyCount uint32, pCopies uintptr)
-	createCommandPool           func(device Device, pCreateInfo *CommandPoolCreateInfo, pAllocator uintptr, pPool *CommandPool) Result
-	destroyCommandPool          func(device Device, pool CommandPool, pAllocator uintptr)
-	allocateCommandBuffers      func(device Device, pAllocateInfo *CommandBufferAllocateInfo, pBuffers *CommandBuffer) Result
-	beginCommandBuffer          func(cb CommandBuffer, pBeginInfo *CommandBufferBeginInfo) Result
-	endCommandBuffer            func(cb CommandBuffer) Result
-	cmdBindPipeline             func(cb CommandBuffer, bindPoint uint32, pipeline Pipeline)
-	cmdBindDescriptorSets       func(cb CommandBuffer, bindPoint uint32, layout PipelineLayout, firstSet, setCount uint32, pSets *DescriptorSet, dynOffsetCount uint32, pDynOffsets uintptr)
-	cmdDispatch                 func(cb CommandBuffer, groupCountX, groupCountY, groupCountZ uint32)
-	cmdCopyBuffer               func(cb CommandBuffer, src, dst Buffer, regionCount uint32, pRegions *BufferCopy)
-	cmdPipelineBarrier          func(cb CommandBuffer, srcStage, dstStage uint32, dependencyFlags uint32, memBarrierCount uint32, pMemBarriers *MemoryBarrier, bufBarrierCount uint32, pBufBarriers *BufferMemoryBarrier, imgBarrierCount uint32, pImgBarriers uintptr)
-	createFence                 func(device Device, pCreateInfo *FenceCreateInfo, pAllocator uintptr, pFence *Fence) Result
-	destroyFence                func(device Device, fence Fence, pAllocator uintptr)
-	waitForFences               func(device Device, fenceCount uint32, pFences *Fence, waitAll uint32, timeout uint64) Result
-	resetFences                 func(device Device, fenceCount uint32, pFences *Fence) Result
-	resetCommandBuffer          func(cb CommandBuffer, flags uint32) Result
-	queueSubmit                 func(queue Queue, submitCount uint32, pSubmits *SubmitInfo, fence Fence) Result
-	flushMappedMemoryRanges     func(device Device, rangeCount uint32, pRanges *MappedMemoryRange) Result
+	getDeviceQueue               func(device Device, queueFamilyIndex, queueIndex uint32, pQueue *Queue)
+	createBuffer                 func(device Device, pCreateInfo *BufferCreateInfo, pAllocator uintptr, pBuffer *Buffer) Result
+	destroyBuffer                func(device Device, buffer Buffer, pAllocator uintptr)
+	getBufferMemoryRequirements  func(device Device, buffer Buffer, pReqs *MemoryRequirements)
+	allocateMemory               func(device Device, pAllocateInfo *MemoryAllocateInfo, pAllocator uintptr, pMemory *DeviceMemory) Result
+	freeMemory                   func(device Device, memory DeviceMemory, pAllocator uintptr)
+	bindBufferMemory             func(device Device, buffer Buffer, memory DeviceMemory, offset uint64) Result
+	mapMemory                    func(device Device, memory DeviceMemory, offset, size uint64, flags uint32, ppData *unsafe.Pointer) Result
+	unmapMemory                  func(device Device, memory DeviceMemory)
+	createShaderModule           func(device Device, pCreateInfo *ShaderModuleCreateInfo, pAllocator uintptr, pModule *ShaderModule) Result
+	destroyShaderModule          func(device Device, module ShaderModule, pAllocator uintptr)
+	createDescriptorSetLayout    func(device Device, pCreateInfo *DescriptorSetLayoutCreateInfo, pAllocator uintptr, pLayout *DescriptorSetLayout) Result
+	destroyDescriptorSetLayout   func(device Device, layout DescriptorSetLayout, pAllocator uintptr)
+	createPipelineLayout         func(device Device, pCreateInfo *PipelineLayoutCreateInfo, pAllocator uintptr, pLayout *PipelineLayout) Result
+	destroyPipelineLayout        func(device Device, layout PipelineLayout, pAllocator uintptr)
+	createComputePipelines       func(device Device, pipelineCache uintptr, createInfoCount uint32, pCreateInfos *ComputePipelineCreateInfo, pAllocator uintptr, pPipelines *Pipeline) Result
+	destroyPipeline              func(device Device, pipeline Pipeline, pAllocator uintptr)
+	createDescriptorPool         func(device Device, pCreateInfo *DescriptorPoolCreateInfo, pAllocator uintptr, pPool *DescriptorPool) Result
+	destroyDescriptorPool        func(device Device, pool DescriptorPool, pAllocator uintptr)
+	allocateDescriptorSets       func(device Device, pAllocateInfo *DescriptorSetAllocateInfo, pSets *DescriptorSet) Result
+	updateDescriptorSets         func(device Device, writeCount uint32, pWrites *WriteDescriptorSet, copyCount uint32, pCopies uintptr)
+	createCommandPool            func(device Device, pCreateInfo *CommandPoolCreateInfo, pAllocator uintptr, pPool *CommandPool) Result
+	destroyCommandPool           func(device Device, pool CommandPool, pAllocator uintptr)
+	allocateCommandBuffers       func(device Device, pAllocateInfo *CommandBufferAllocateInfo, pBuffers *CommandBuffer) Result
+	beginCommandBuffer           func(cb CommandBuffer, pBeginInfo *CommandBufferBeginInfo) Result
+	endCommandBuffer             func(cb CommandBuffer) Result
+	cmdBindPipeline              func(cb CommandBuffer, bindPoint uint32, pipeline Pipeline)
+	cmdBindDescriptorSets        func(cb CommandBuffer, bindPoint uint32, layout PipelineLayout, firstSet, setCount uint32, pSets *DescriptorSet, dynOffsetCount uint32, pDynOffsets uintptr)
+	cmdDispatch                  func(cb CommandBuffer, groupCountX, groupCountY, groupCountZ uint32)
+	cmdCopyBuffer                func(cb CommandBuffer, src, dst Buffer, regionCount uint32, pRegions *BufferCopy)
+	cmdPipelineBarrier           func(cb CommandBuffer, srcStage, dstStage uint32, dependencyFlags uint32, memBarrierCount uint32, pMemBarriers *MemoryBarrier, bufBarrierCount uint32, pBufBarriers *BufferMemoryBarrier, imgBarrierCount uint32, pImgBarriers uintptr)
+	createFence                  func(device Device, pCreateInfo *FenceCreateInfo, pAllocator uintptr, pFence *Fence) Result
+	destroyFence                 func(device Device, fence Fence, pAllocator uintptr)
+	waitForFences                func(device Device, fenceCount uint32, pFences *Fence, waitAll uint32, timeout uint64) Result
+	resetFences                  func(device Device, fenceCount uint32, pFences *Fence) Result
+	resetCommandBuffer           func(cb CommandBuffer, flags uint32) Result
+	queueSubmit                  func(queue Queue, submitCount uint32, pSubmits *SubmitInfo, fence Fence) Result
+	flushMappedMemoryRanges      func(device Device, rangeCount uint32, pRanges *MappedMemoryRange) Result
 	invalidateMappedMemoryRanges func(device Device, rangeCount uint32, pRanges *MappedMemoryRange) Result
-	deviceWaitIdle              func(device Device) Result
-	cmdUpdateBuffer             func(cb CommandBuffer, dst Buffer, offset uint64, dataSize uint64, pData unsafe.Pointer)
-	destroyDevice               func(device Device, pAllocator uintptr)
+	deviceWaitIdle               func(device Device) Result
+	cmdUpdateBuffer              func(cb CommandBuffer, dst Buffer, offset uint64, dataSize uint64, pData unsafe.Pointer)
+	destroyDevice                func(device Device, pAllocator uintptr)
 }
 
 // LoadDeviceFuncs resolves device-level functions via vkGetDeviceProcAddr.
@@ -69,6 +69,11 @@ func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, err
 	type entry struct {
 		target interface{}
 		name   string
+	}
+	// Resolve destruction first so a later resolution failure can release the
+	// logical device that the caller has already created.
+	if err := resolve(&f.destroyDevice, "vkDestroyDevice"); err != nil {
+		return nil, err
 	}
 
 	entries := []entry{
@@ -113,11 +118,11 @@ func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, err
 		{&f.invalidateMappedMemoryRanges, "vkInvalidateMappedMemoryRanges"},
 		{&f.deviceWaitIdle, "vkDeviceWaitIdle"},
 		{&f.cmdUpdateBuffer, "vkCmdUpdateBuffer"},
-		{&f.destroyDevice, "vkDestroyDevice"},
 	}
 
 	for _, e := range entries {
 		if err := resolve(e.target, e.name); err != nil {
+			f.destroyDevice(device, 0)
 			return nil, err
 		}
 	}
@@ -226,6 +231,9 @@ func (f *DeviceFuncs) DestroyPipelineLayout(device Device, layout PipelineLayout
 }
 
 func (f *DeviceFuncs) CreateComputePipelines(device Device, infos []ComputePipelineCreateInfo) ([]Pipeline, error) {
+	if len(infos) == 0 {
+		return nil, fmt.Errorf("vkCreateComputePipelines requires at least one create info")
+	}
 	pipelines := make([]Pipeline, len(infos))
 	res := f.createComputePipelines(device, 0, uint32(len(infos)), &infos[0], 0, &pipelines[0])
 	if res != Success {
@@ -252,6 +260,9 @@ func (f *DeviceFuncs) DestroyDescriptorPool(device Device, pool DescriptorPool) 
 }
 
 func (f *DeviceFuncs) AllocateDescriptorSets(device Device, info *DescriptorSetAllocateInfo) ([]DescriptorSet, error) {
+	if info == nil || info.DescriptorSetCount == 0 {
+		return nil, fmt.Errorf("vkAllocateDescriptorSets requires at least one descriptor set")
+	}
 	sets := make([]DescriptorSet, info.DescriptorSetCount)
 	res := f.allocateDescriptorSets(device, info, &sets[0])
 	if res != Success {
@@ -261,6 +272,9 @@ func (f *DeviceFuncs) AllocateDescriptorSets(device Device, info *DescriptorSetA
 }
 
 func (f *DeviceFuncs) UpdateDescriptorSets(device Device, writes []WriteDescriptorSet) {
+	if len(writes) == 0 {
+		return
+	}
 	f.updateDescriptorSets(device, uint32(len(writes)), &writes[0], 0, 0)
 }
 
@@ -278,6 +292,9 @@ func (f *DeviceFuncs) DestroyCommandPool(device Device, pool CommandPool) {
 }
 
 func (f *DeviceFuncs) AllocateCommandBuffers(device Device, info *CommandBufferAllocateInfo) ([]CommandBuffer, error) {
+	if info == nil || info.CommandBufferCount == 0 {
+		return nil, fmt.Errorf("vkAllocateCommandBuffers requires at least one command buffer")
+	}
 	bufs := make([]CommandBuffer, info.CommandBufferCount)
 	res := f.allocateCommandBuffers(device, info, &bufs[0])
 	if res != Success {
@@ -307,6 +324,9 @@ func (f *DeviceFuncs) CmdBindPipeline(cb CommandBuffer, bindPoint uint32, pipeli
 }
 
 func (f *DeviceFuncs) CmdBindDescriptorSets(cb CommandBuffer, bindPoint uint32, layout PipelineLayout, firstSet uint32, sets []DescriptorSet) {
+	if len(sets) == 0 {
+		return
+	}
 	f.cmdBindDescriptorSets(cb, bindPoint, layout, firstSet, uint32(len(sets)), &sets[0], 0, 0)
 }
 
@@ -315,6 +335,9 @@ func (f *DeviceFuncs) CmdDispatch(cb CommandBuffer, groupCountX, groupCountY, gr
 }
 
 func (f *DeviceFuncs) CmdCopyBuffer(cb CommandBuffer, src, dst Buffer, regions []BufferCopy) {
+	if len(regions) == 0 {
+		return
+	}
 	f.cmdCopyBuffer(cb, src, dst, uint32(len(regions)), &regions[0])
 }
 
@@ -340,6 +363,9 @@ func (f *DeviceFuncs) DestroyFence(device Device, fence Fence) {
 }
 
 func (f *DeviceFuncs) WaitForFences(device Device, fences []Fence, waitAll bool, timeout uint64) error {
+	if len(fences) == 0 {
+		return fmt.Errorf("vkWaitForFences requires at least one fence")
+	}
 	var wa uint32
 	if waitAll {
 		wa = 1
@@ -352,6 +378,9 @@ func (f *DeviceFuncs) WaitForFences(device Device, fences []Fence, waitAll bool,
 }
 
 func (f *DeviceFuncs) ResetFences(device Device, fences []Fence) error {
+	if len(fences) == 0 {
+		return fmt.Errorf("vkResetFences requires at least one fence")
+	}
 	res := f.resetFences(device, uint32(len(fences)), &fences[0])
 	if res != Success {
 		return fmt.Errorf("vkResetFences failed: %d", res)
@@ -368,6 +397,13 @@ func (f *DeviceFuncs) ResetCommandBuffer(cb CommandBuffer, flags uint32) error {
 }
 
 func (f *DeviceFuncs) QueueSubmit(queue Queue, submits []SubmitInfo, fence Fence) error {
+	if len(submits) == 0 {
+		res := f.queueSubmit(queue, 0, nil, fence)
+		if res != Success {
+			return fmt.Errorf("vkQueueSubmit failed: %d", res)
+		}
+		return nil
+	}
 	res := f.queueSubmit(queue, uint32(len(submits)), &submits[0], fence)
 	if res != Success {
 		return fmt.Errorf("vkQueueSubmit failed: %d", res)
@@ -376,6 +412,9 @@ func (f *DeviceFuncs) QueueSubmit(queue Queue, submits []SubmitInfo, fence Fence
 }
 
 func (f *DeviceFuncs) FlushMappedMemoryRanges(device Device, ranges []MappedMemoryRange) error {
+	if len(ranges) == 0 {
+		return nil
+	}
 	res := f.flushMappedMemoryRanges(device, uint32(len(ranges)), &ranges[0])
 	if res != Success {
 		return fmt.Errorf("vkFlushMappedMemoryRanges failed: %d", res)
@@ -384,6 +423,9 @@ func (f *DeviceFuncs) FlushMappedMemoryRanges(device Device, ranges []MappedMemo
 }
 
 func (f *DeviceFuncs) InvalidateMappedMemoryRanges(device Device, ranges []MappedMemoryRange) error {
+	if len(ranges) == 0 {
+		return nil
+	}
 	res := f.invalidateMappedMemoryRanges(device, uint32(len(ranges)), &ranges[0])
 	if res != Success {
 		return fmt.Errorf("vkInvalidateMappedMemoryRanges failed: %d", res)
@@ -400,6 +442,9 @@ func (f *DeviceFuncs) DeviceWaitIdle(device Device) error {
 }
 
 func (f *DeviceFuncs) CmdUpdateBuffer(cb CommandBuffer, dst Buffer, offset uint64, data []byte) {
+	if len(data) == 0 {
+		return
+	}
 	f.cmdUpdateBuffer(cb, dst, offset, uint64(len(data)), unsafe.Pointer(&data[0]))
 }
 

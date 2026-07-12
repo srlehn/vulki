@@ -2,6 +2,7 @@ package compute
 
 import (
 	"fmt"
+	"sync"
 	"syscall"
 
 	"github.com/srlehn/vulki/vk"
@@ -18,6 +19,8 @@ type Context struct {
 	Queue       vk.Queue
 	QueueFamily uint32
 	MemProps    vk.PhysicalDeviceMemoryProperties
+
+	queueMu sync.Mutex
 }
 
 // NewContext creates a Vulkan instance, selects a physical device with a compute
@@ -147,6 +150,12 @@ func NewContext() (*Context, error) {
 
 // Close destroys all Vulkan resources in reverse order.
 func (c *Context) Close() {
+	if c == nil {
+		return
+	}
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+
 	if c.Device != 0 {
 		c.DevFuncs.DeviceWaitIdle(c.Device)
 		c.DevFuncs.DestroyDevice(c.Device)
@@ -160,4 +169,17 @@ func (c *Context) Close() {
 		c.Loader.Close()
 		c.Loader = nil
 	}
+}
+
+// submitAndWait serializes access to the Vulkan queue. Vulkan requires host
+// synchronization for queue operations, even when command buffers are built
+// independently.
+func (c *Context) submitAndWait(submits []vk.SubmitInfo, fence vk.Fence) error {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+
+	if err := c.DevFuncs.QueueSubmit(c.Queue, submits, fence); err != nil {
+		return err
+	}
+	return c.DevFuncs.WaitForFences(c.Device, []vk.Fence{fence}, true, ^uint64(0))
 }

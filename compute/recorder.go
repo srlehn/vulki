@@ -96,6 +96,24 @@ func (r *CommandRecorder) BarrierTransferToCompute(bufs ...vk.Buffer) {
 
 // UpdateBuffer writes small data (<=64KB) into a buffer from the command stream.
 func (r *CommandRecorder) UpdateBuffer(buf vk.Buffer, offset uint64, data []byte) {
+	// The same parameter buffer is commonly reused by consecutive dispatches.
+	// Make prior shader reads complete before the transfer stage overwrites it.
+	barrier := vk.BufferMemoryBarrier{
+		SType:               vk.StructureTypeBufferMemoryBarrier,
+		SrcAccessMask:       vk.AccessShaderReadBit | vk.AccessShaderWriteBit,
+		DstAccessMask:       vk.AccessTransferWriteBit,
+		SrcQueueFamilyIndex: ^uint32(0),
+		DstQueueFamilyIndex: ^uint32(0),
+		Buffer:              buf,
+		Offset:              0,
+		Size:                vk.WholeSize,
+	}
+	r.ctx.DevFuncs.CmdPipelineBarrier(
+		r.cb,
+		vk.PipelineStageComputeShaderBit,
+		vk.PipelineStageTransferBit,
+		[]vk.BufferMemoryBarrier{barrier},
+	)
 	r.ctx.DevFuncs.CmdUpdateBuffer(r.cb, buf, offset, data)
 }
 
@@ -118,10 +136,7 @@ func (r *CommandRecorder) Submit() error {
 		CommandBufferCount: 1,
 		PCommandBuffers:    &r.cb,
 	}
-	err = r.ctx.DevFuncs.QueueSubmit(r.ctx.Queue, []vk.SubmitInfo{submitInfo}, fence)
-	if err == nil {
-		err = r.ctx.DevFuncs.WaitForFences(r.ctx.Device, []vk.Fence{fence}, true, ^uint64(0))
-	}
+	err = r.ctx.submitAndWait([]vk.SubmitInfo{submitInfo}, fence)
 
 	r.ctx.DevFuncs.DestroyFence(r.ctx.Device, fence)
 	r.ctx.DevFuncs.DestroyCommandPool(r.ctx.Device, r.pool)

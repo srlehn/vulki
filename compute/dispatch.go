@@ -54,9 +54,5 @@ func (c *Context) Dispatch(pipeline *Pipeline, groupCountX, groupCountY, groupCo
 		CommandBufferCount: 1,
 		PCommandBuffers:    &cb,
 	}
-	if err := c.DevFuncs.QueueSubmit(c.Queue, []vk.SubmitInfo{submitInfo}, fence); err != nil {
-		return err
-	}
-
-	return c.DevFuncs.WaitForFences(c.Device, []vk.Fence{fence}, true, ^uint64(0))
+	return c.submitAndWait([]vk.SubmitInfo{submitInfo}, fence)
 }

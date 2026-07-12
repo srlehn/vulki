@@ -3,6 +3,7 @@ package vk
 import (
 	"fmt"
 	"runtime"
+	"strconv"
 	"syscall"
 
 	"github.com/ebitengine/purego"
@@ -16,6 +17,10 @@ type Loader struct {
 
 // Open loads the Vulkan shared library and resolves vkGetInstanceProcAddr.
 func Open() (*Loader, error) {
+	if strconv.IntSize != 64 {
+		return nil, fmt.Errorf("vk: only 64-bit targets are supported")
+	}
+
 	libName := vulkanLibraryName()
 	lib, err := purego.Dlopen(libName, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 	if err != nil {

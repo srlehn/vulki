@@ -2,7 +2,6 @@ package vk
 
 import (
 	"fmt"
-	"unsafe"
 
 	"github.com/ebitengine/purego"
 )
@@ -43,12 +42,17 @@ func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 		return nil
 	}
 
+	// Resolve destruction first so a later resolution failure can release the
+	// instance that the caller has already created.
+	if err := resolve(&f.destroyInstance, "vkDestroyInstance"); err != nil {
+		return nil, err
+	}
+
 	entries := []struct {
 		target interface{}
 		name   string
 	}{
 		{&f.createInstance, "vkCreateInstance"},
-		{&f.destroyInstance, "vkDestroyInstance"},
 		{&f.enumeratePhysicalDevices, "vkEnumeratePhysicalDevices"},
 		{&f.getPhysicalDeviceProperties, "vkGetPhysicalDeviceProperties"},
 		{&f.getPhysicalDeviceQueueFamilyProps, "vkGetPhysicalDeviceQueueFamilyProperties"},
@@ -59,6 +63,7 @@ func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 
 	for _, e := range entries {
 		if err := resolve(e.target, e.name); err != nil {
+			f.destroyInstance(instance, 0)
 			return nil, err
 		}
 	}
@@ -131,7 +136,6 @@ func (f *InstanceFuncs) CreateDevice(physicalDevice PhysicalDevice, info *Device
 }
 
 func (f *InstanceFuncs) GetDeviceProcAddr(device Device, name string) uintptr {
-	_ = unsafe.Sizeof(0) // keep unsafe import
 	cname := append([]byte(name), 0)
 	return f.getDeviceProcAddr(device, &cname[0])
 }

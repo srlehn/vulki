@@ -13,12 +13,19 @@ type Buffer struct {
 	DeviceMemory  vk.DeviceMemory
 	StagingBuffer vk.Buffer
 	StagingMemory vk.DeviceMemory
-	Size          uint64
+	size          uint64
 }
 
 // CreateBuffer creates a device-local buffer (for compute) and a host-visible staging buffer (for transfers).
 func (c *Context) CreateBuffer(size uint64, extraUsage uint32) (*Buffer, error) {
-	b := &Buffer{Size: size}
+	if c == nil || c.DevFuncs == nil || c.Device == 0 {
+		return nil, fmt.Errorf("compute: invalid context")
+	}
+	if size == 0 {
+		return nil, fmt.Errorf("compute: buffer size must be greater than zero")
+	}
+
+	b := &Buffer{size: size}
 
 	// Create device-local buffer.
 	deviceBufInfo := vk.BufferCreateInfo{
@@ -97,6 +104,16 @@ func (c *Context) CreateBuffer(size uint64, extraUsage uint32) (*Buffer, error) 
 
 // Upload copies data from the host to the device-local buffer via the staging buffer.
 func (b *Buffer) Upload(ctx *Context, data []byte) error {
+	if b == nil || ctx == nil {
+		return fmt.Errorf("compute: invalid buffer upload")
+	}
+	if uint64(len(data)) > b.size {
+		return fmt.Errorf("compute: upload size %d exceeds buffer size %d", len(data), b.size)
+	}
+	if len(data) == 0 {
+		return nil
+	}
+
 	// Map staging memory and copy data in.
 	ptr, err := ctx.DevFuncs.MapMemory(ctx.Device, b.StagingMemory, 0, uint64(len(data)))
 	if err != nil {
@@ -112,6 +129,16 @@ func (b *Buffer) Upload(ctx *Context, data []byte) error {
 
 // Download copies data from the device-local buffer to the host via the staging buffer.
 func (b *Buffer) Download(ctx *Context, size uint64) ([]byte, error) {
+	if b == nil || ctx == nil {
+		return nil, fmt.Errorf("compute: invalid buffer download")
+	}
+	if size > b.size {
+		return nil, fmt.Errorf("compute: download size %d exceeds buffer size %d", size, b.size)
+	}
+	if size == 0 {
+		return []byte{}, nil
+	}
+
 	// Record and submit a copy command.
 	if err := ctx.copyBuffer(b.DeviceBuffer, b.StagingBuffer, size); err != nil {
 		return nil, err
@@ -128,6 +155,14 @@ func (b *Buffer) Download(ctx *Context, size uint64) ([]byte, error) {
 	ctx.DevFuncs.UnmapMemory(ctx.Device, b.StagingMemory)
 
 	return out, nil
+}
+
+// Size returns the buffer's fixed allocation size in bytes.
+func (b *Buffer) Size() uint64 {
+	if b == nil {
+		return 0
+	}
+	return b.size
 }
 
 // Destroy releases all buffer and memory resources.
@@ -156,6 +191,10 @@ func (b *Buffer) destroyDevice(ctx *Context) {
 
 // copyBuffer records and submits a single buffer copy command.
 func (ctx *Context) copyBuffer(src, dst vk.Buffer, size uint64) error {
+	if size == 0 {
+		return nil
+	}
+
 	poolInfo := vk.CommandPoolCreateInfo{
 		SType:            vk.StructureTypeCommandPoolCreateInfo,
 		QueueFamilyIndex: ctx.QueueFamily,
@@ -205,11 +244,7 @@ func (ctx *Context) copyBuffer(src, dst vk.Buffer, size uint64) error {
 		CommandBufferCount: 1,
 		PCommandBuffers:    &cb,
 	}
-	if err := ctx.DevFuncs.QueueSubmit(ctx.Queue, []vk.SubmitInfo{submitInfo}, fence); err != nil {
-		return err
-	}
-
-	return ctx.DevFuncs.WaitForFences(ctx.Device, []vk.Fence{fence}, true, ^uint64(0))
+	return ctx.submitAndWait([]vk.SubmitInfo{submitInfo}, fence)
 }
 
 func findMemoryType(ctx *Context, typeBits uint32, properties vk.MemoryPropertyFlags) (uint32, error) {

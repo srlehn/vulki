@@ -20,12 +20,14 @@ When you find any errors please report them as issues.
 ## Requirements
 
 - Go 1.26 or newer.
+- A 64-bit target.
 - A Vulkan 1.1 loader.
 - A Vulkan device and driver exposing a compute queue.
 - ImageMagick's `convert` command only for the registration CLI self-test.
 
-The loader uses the platform Vulkan library name on Linux, Windows, and macOS.
-On macOS, a Vulkan portability implementation such as MoltenVK is required.
+The Linux loader path is tested. Library lookup exists for Windows but is not
+yet verified. macOS portability-instance handling is not implemented, so macOS
+is not currently supported even when MoltenVK is installed.
 
 ## Install
 
@@ -94,6 +96,14 @@ Estimate the transform between two PNG images:
 go run ./cmd/correlate image-a.png image-b.png
 ```
 
+The two input images must have the same pixel dimensions. Inputs with different
+dimensions are rejected until the higher-resolution-image semantics from the
+reference algorithm are implemented explicitly.
+
+Phase-correlation peaks are normalized to the theoretical `[0, 1]` range.
+Matches at or below the paper's `0.03` validity threshold return
+`imgproc.ErrLowConfidence` instead of a transform.
+
 Run the randomized registration self-test for one PNG. Add `-save` to write a
 stacked comparison image:
 
@@ -113,6 +123,8 @@ go vet ./...
 
 Tests that need a Vulkan compute device skip when no suitable loader, driver,
 or device is available. A machine with Vulkan is required for full validation.
+When `spirv-val` is installed, the image-processing shader test also validates
+every generated module against the Vulkan 1.1 SPIR-V rules.
 
 Dependencies are vendored, so the test and build commands use the checked-in
 dependency source by default.

@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/srlehn/vulki/vk"
@@ -25,6 +26,26 @@ type BufferBinding struct {
 // CreateComputePipeline creates a shader module, descriptor set layout, pipeline layout,
 // compute pipeline, descriptor pool, and descriptor set, and binds the provided buffers.
 func (c *Context) CreateComputePipeline(spirv []byte, bindings []BufferBinding) (*Pipeline, error) {
+	if c == nil || c.DevFuncs == nil || c.Device == 0 {
+		return nil, fmt.Errorf("compute: invalid context")
+	}
+	if len(spirv) == 0 || len(spirv)%4 != 0 {
+		return nil, fmt.Errorf("compute: SPIR-V must contain a non-empty sequence of 32-bit words")
+	}
+	if len(bindings) == 0 {
+		return nil, fmt.Errorf("compute: at least one buffer binding is required")
+	}
+	seenBindings := make(map[uint32]struct{}, len(bindings))
+	for _, binding := range bindings {
+		if binding.Buffer == nil || binding.Buffer.DeviceBuffer == 0 || binding.Buffer.Size() == 0 {
+			return nil, fmt.Errorf("compute: binding %d has an invalid buffer", binding.Binding)
+		}
+		if _, exists := seenBindings[binding.Binding]; exists {
+			return nil, fmt.Errorf("compute: duplicate buffer binding %d", binding.Binding)
+		}
+		seenBindings[binding.Binding] = struct{}{}
+	}
+
 	p := &Pipeline{}
 	var err error
 
@@ -130,7 +151,7 @@ func (c *Context) CreateComputePipeline(spirv []byte, bindings []BufferBinding) 
 		bufInfos[i] = vk.DescriptorBufferInfo{
 			Buffer: b.Buffer.DeviceBuffer,
 			Offset: 0,
-			Range:  b.Buffer.Size,
+			Range:  b.Buffer.Size(),
 		}
 		writes[i] = vk.WriteDescriptorSet{
 			SType:           vk.StructureTypeWriteDescriptorSet,

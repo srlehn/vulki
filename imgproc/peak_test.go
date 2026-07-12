@@ -1,6 +1,8 @@
 package imgproc
 
 import (
+	"image"
+	"image/color"
 	"math"
 	"testing"
 )
@@ -137,5 +139,74 @@ func TestRealToComplex(t *testing.T) {
 		if v[0] != data[i] || v[1] != 0 {
 			t.Errorf("out[%d] = %v, want {%v, 0}", i, v, data[i])
 		}
+	}
+}
+
+func TestPackRGBAHandlesSubimageStrideAndBounds(t *testing.T) {
+	parent := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			parent.SetRGBA(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: uint8(x + y), A: 255})
+		}
+	}
+	sub := parent.SubImage(image.Rect(1, 1, 3, 3)).(*image.RGBA)
+
+	packed, err := packRGBA(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packed) != 4 {
+		t.Fatalf("packed length = %d, want 4", len(packed))
+	}
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			pixel := sub.RGBAAt(x+1, y+1)
+			want := uint32(pixel.R) | uint32(pixel.G)<<8 | uint32(pixel.B)<<16 | uint32(pixel.A)<<24
+			if got := packed[y*2+x]; got != want {
+				t.Errorf("packed[%d,%d] = %#x, want %#x", x, y, got, want)
+			}
+		}
+	}
+}
+
+func TestPackRGBARejectsShortPixelData(t *testing.T) {
+	img := &image.RGBA{
+		Pix:    make([]byte, 8),
+		Stride: 8,
+		Rect:   image.Rect(0, 0, 2, 2),
+	}
+	if _, err := packRGBA(img); err == nil {
+		t.Fatal("packRGBA accepted short pixel data")
+	}
+}
+
+func TestBilinearWarpPreservesNonZeroBounds(t *testing.T) {
+	parent := image.NewRGBA(image.Rect(0, 0, 5, 5))
+	for y := 1; y < 4; y++ {
+		for x := 1; x < 4; x++ {
+			parent.SetRGBA(x, y, color.RGBA{R: uint8(10*x + y), G: uint8(x + 10*y), A: 255})
+		}
+	}
+	sub := parent.SubImage(image.Rect(1, 1, 4, 4)).(*image.RGBA)
+	warped := BilinearWarp(sub, 0, 1)
+	if warped.Bounds() != sub.Bounds() {
+		t.Fatalf("warped bounds = %v, want %v", warped.Bounds(), sub.Bounds())
+	}
+	for y := sub.Bounds().Min.Y; y < sub.Bounds().Max.Y; y++ {
+		for x := sub.Bounds().Min.X; x < sub.Bounds().Max.X; x++ {
+			if got, want := warped.RGBAAt(x, y), sub.RGBAAt(x, y); got != want {
+				t.Errorf("warped pixel (%d,%d) = %v, want %v", x, y, got, want)
+			}
+		}
+	}
+}
+
+func TestPadImageToRGBAHandlesNonZeroBounds(t *testing.T) {
+	parent := image.NewRGBA(image.Rect(0, 0, 3, 3))
+	parent.SetRGBA(1, 1, color.RGBA{R: 1, G: 2, B: 3, A: 4})
+	sub := parent.SubImage(image.Rect(1, 1, 2, 2)).(*image.RGBA)
+	packed := padImageToRGBA(sub, 1, 1)
+	if len(packed) != 1 || packed[0] != 0x04030201 {
+		t.Fatalf("packed image = %#v, want [0x04030201]", packed)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"math"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -80,6 +81,8 @@ func runCorrelate(pathA, pathB string) error {
 	fmt.Printf("Angle:       %.2f°\n", result.Angle)
 	fmt.Printf("Scale:       %.4f\n", result.Scale)
 	fmt.Printf("Translation: (%.2f, %.2f) px\n", result.Tx, result.Ty)
+	fmt.Printf("Confidence:  rotation %.4f, translation %.4f\n",
+		result.RotationConfidence, result.TranslationConfidence)
 
 	return nil
 }
@@ -159,14 +162,17 @@ func runSelfTest(path string, save bool) error {
 		return fmt.Errorf("phase correlate: %w", err)
 	}
 	elapsed := time.Since(t0)
+	txError := result.Tx - float64(gtTx)
+	tyError := result.Ty - float64(gtTy)
+	angleError := math.Mod(result.Angle-gtRot+180, 360) - 180
+	scaleError := result.Scale - gtScale
 
 	fmt.Println()
 	fmt.Printf("Phase correlation took %dms\n", elapsed.Milliseconds())
 	fmt.Printf("Ground truth: tx=%d  ty=%d  rot=%.2f°  scale=%.4f\n", gtTx, gtTy, gtRot, gtScale)
 	fmt.Printf("Detected:     tx=%.2f  ty=%.2f  rot=%.2f°  scale=%.4f\n", result.Tx, result.Ty, result.Angle, result.Scale)
 	fmt.Printf("Error:        tx=%.2f  ty=%.2f  rot=%.2f°  scale=%.4f\n",
-		result.Tx-float64(gtTx), result.Ty-float64(gtTy),
-		result.Angle-gtRot, result.Scale-gtScale)
+		txError, tyError, angleError, scaleError)
 
 	if save {
 		// Reconstruct: apply detected params via SRT (same as ground truth image).
@@ -208,6 +214,18 @@ func runSelfTest(path string, save bool) error {
 			return fmt.Errorf("save stacked: %w", err)
 		}
 		fmt.Printf("Saved: %s\n", savePath)
+	}
+
+	const (
+		maxTranslationError = 3.0
+		maxAngleError       = 2.0
+		maxScaleError       = 0.05
+	)
+	if math.Abs(txError) > maxTranslationError ||
+		math.Abs(tyError) > maxTranslationError ||
+		math.Abs(angleError) > maxAngleError ||
+		math.Abs(scaleError) > maxScaleError {
+		return fmt.Errorf("self-test exceeded error tolerances")
 	}
 
 	return nil

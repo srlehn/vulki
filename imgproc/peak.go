@@ -138,7 +138,7 @@ func BilinearWarp(src *image.RGBA, angleDeg, scale float64) *image.RGBA {
 			sx := (dx*cosA+dy*sinA)/scale + cx
 			sy := (-dx*sinA+dy*cosA)/scale + cy
 
-			dst.SetRGBA(x, y, sampleBilinear(src, sx, sy))
+			dst.SetRGBA(bounds.Min.X+x, bounds.Min.Y+y, sampleBilinear(src, sx, sy))
 		}
 	}
 	return dst
@@ -233,26 +233,56 @@ func log2i(n int) int {
 // padImageToRGBA pads an RGBA image to padW x padH with black pixels,
 // centering the content so the Hann window is strongest over the image.
 func padImageToRGBA(src *image.RGBA, padW, padH int) []uint32 {
+	if src == nil || padW <= 0 || padH <= 0 {
+		return nil
+	}
 	bounds := src.Bounds()
 	srcW := bounds.Dx()
 	srcH := bounds.Dy()
 	out := make([]uint32, padW*padH)
 
-	// Center the image in the padded buffer.
+	// Center the image, cropping equally from opposite sides when needed.
 	offX := (padW - srcW) / 2
 	offY := (padH - srcH) / 2
+	srcStartX, srcStartY := 0, 0
+	dstStartX, dstStartY := offX, offY
+	if dstStartX < 0 {
+		srcStartX = -dstStartX
+		dstStartX = 0
+	}
+	if dstStartY < 0 {
+		srcStartY = -dstStartY
+		dstStartY = 0
+	}
+	copyW := min(srcW-srcStartX, padW-dstStartX)
+	copyH := min(srcH-srcStartY, padH-dstStartY)
 
-	for y := 0; y < srcH && y+offY < padH; y++ {
-		for x := 0; x < srcW && x+offX < padW; x++ {
-			srcOff := (y+bounds.Min.Y)*src.Stride + (x+bounds.Min.X)*4
-			r := uint32(src.Pix[srcOff])
-			g := uint32(src.Pix[srcOff+1])
-			b := uint32(src.Pix[srcOff+2])
-			a := uint32(src.Pix[srcOff+3])
-			out[(y+offY)*padW+(x+offX)] = r | (g << 8) | (b << 16) | (a << 24)
+	for y := 0; y < copyH; y++ {
+		for x := 0; x < copyW; x++ {
+			pixel := src.RGBAAt(bounds.Min.X+srcStartX+x, bounds.Min.Y+srcStartY+y)
+			r := uint32(pixel.R)
+			g := uint32(pixel.G)
+			b := uint32(pixel.B)
+			a := uint32(pixel.A)
+			out[(y+dstStartY)*padW+(x+dstStartX)] = r | (g << 8) | (b << 16) | (a << 24)
 		}
 	}
 	return out
+}
+
+func nextPow2Checked(n int) (int, bool) {
+	if n <= 0 {
+		return 0, false
+	}
+	maxInt := int(^uint(0) >> 1)
+	p := 1
+	for p < n {
+		if p > maxInt/2 {
+			return 0, false
+		}
+		p <<= 1
+	}
+	return p, true
 }
 
 // realToComplex converts float32 grayscale to complex (real + 0i).
