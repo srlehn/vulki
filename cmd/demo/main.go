@@ -34,7 +34,7 @@ func run() error {
 	const bufSize = numElements * elementSize
 
 	inputData := make([]byte, bufSize)
-	for i := 0; i < numElements; i++ {
+	for i := range numElements {
 		binary.LittleEndian.PutUint32(inputData[i*elementSize:], math.Float32bits(float32(i)))
 	}
 
@@ -87,14 +87,14 @@ func run() error {
 
 	fmt.Println("\nResults (first 16 elements):")
 	fmt.Printf("%-10s %-10s %-10s\n", "Index", "Input", "Output")
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		in := math.Float32frombits(binary.LittleEndian.Uint32(inputData[i*elementSize:]))
 		out := math.Float32frombits(binary.LittleEndian.Uint32(result[i*elementSize:]))
 		fmt.Printf("%-10d %-10.1f %-10.1f\n", i, in, out)
 	}
 
 	errors := 0
-	for i := 0; i < numElements; i++ {
+	for i := range numElements {
 		in := math.Float32frombits(binary.LittleEndian.Uint32(inputData[i*elementSize:]))
 		out := math.Float32frombits(binary.LittleEndian.Uint32(result[i*elementSize:]))
 		if out != in*2.0 {

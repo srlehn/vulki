@@ -85,7 +85,7 @@ func recordFFT1D(
 	}
 
 	// Butterfly stages.
-	for s := 0; s < log2n; s++ {
+	for s := range log2n {
 		p := fftButterflyParams{
 			Stage:    uint32(s),
 			N:        uint32(n),

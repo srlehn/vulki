@@ -115,7 +115,7 @@ func TestLoadInstanceFuncsFailureOwnershipMatrix(t *testing.T) {
 			return 1
 		}}
 
-		functions, err := loadInstanceFuncs(loader, Instance(1), func(target interface{}, _ uintptr) {
+		functions, err := loadInstanceFuncs(loader, Instance(1), func(target any, _ uintptr) {
 			if destroy, ok := target.(*func(Instance, uintptr)); ok {
 				*destroy = func(Instance, uintptr) { destroyed = true }
 			}

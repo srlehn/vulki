@@ -12,8 +12,8 @@ func find2DPeak(data [][2]float32, w, h int) (float64, float64) {
 	// Find max magnitude.
 	maxVal := float64(0)
 	maxX, maxY := 0, 0
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			c := data[y*w+x]
 			mag := math.Sqrt(float64(c[0]*c[0] + c[1]*c[1]))
 			if mag > maxVal {
@@ -62,8 +62,8 @@ func find2DPeak(data [][2]float32, w, h int) (float64, float64) {
 func find2DPeakWithMag(data [][2]float32, w, h int) (float64, float64, float64) {
 	maxVal := float64(0)
 	maxX, maxY := 0, 0
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			c := data[y*w+x]
 			mag := math.Sqrt(float64(c[0]*c[0] + c[1]*c[1]))
 			if mag > maxVal {
@@ -135,8 +135,8 @@ func bilinearWarp(src *image.RGBA, angleDeg, scale float64) *image.RGBA {
 	cosA := math.Cos(rad)
 	sinA := math.Sin(rad)
 
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			// Map destination back to source (inverse transform).
 			dx := float64(x) - cx
 			dy := float64(y) - cy
@@ -263,8 +263,8 @@ func padImageToRGBA(src *image.RGBA, padW, padH int) []uint32 {
 	copyW := min(srcW-srcStartX, padW-dstStartX)
 	copyH := min(srcH-srcStartY, padH-dstStartY)
 
-	for y := 0; y < copyH; y++ {
-		for x := 0; x < copyW; x++ {
+	for y := range copyH {
+		for x := range copyW {
 			pixel := src.RGBAAt(bounds.Min.X+srcStartX+x, bounds.Min.Y+srcStartY+y)
 			r := uint32(pixel.R)
 			g := uint32(pixel.G)
@@ -351,8 +351,8 @@ func cropDogHannPad(img *image.RGBA, cropSize, padSize int) []float32 {
 
 	// Convert crop to grayscale.
 	gray := make([]float32, cropSize*cropSize)
-	for y := 0; y < cropSize; y++ {
-		for x := 0; x < cropSize; x++ {
+	for y := range cropSize {
+		for x := range cropSize {
 			sx := bounds.Min.X + offX + x
 			sy := bounds.Min.Y + offY + y
 			if sx >= bounds.Max.X || sy >= bounds.Max.Y {
@@ -373,8 +373,8 @@ func cropDogHannPad(img *image.RGBA, cropSize, padSize int) []float32 {
 	// Embed centered in padded buffer.
 	out := make([]float32, padSize*padSize)
 	padOff := (padSize - cropSize) / 2
-	for y := 0; y < cropSize; y++ {
-		for x := 0; x < cropSize; x++ {
+	for y := range cropSize {
+		for x := range cropSize {
 			out[(y+padOff)*padSize+(x+padOff)] = gray[y*cropSize+x]
 		}
 	}
@@ -383,9 +383,9 @@ func cropDogHannPad(img *image.RGBA, cropSize, padSize int) []float32 {
 
 // applyHann2D applies a separable 2D Hann window in-place.
 func applyHann2D(data []float32, w, h int) {
-	for y := 0; y < h; y++ {
+	for y := range h {
 		wy := float32(0.5 * (1 - math.Cos(2*math.Pi*float64(y)/float64(h))))
-		for x := 0; x < w; x++ {
+		for x := range w {
 			wx := float32(0.5 * (1 - math.Cos(2*math.Pi*float64(x)/float64(w))))
 			data[y*w+x] *= wx * wy
 		}
@@ -418,8 +418,8 @@ func gaussianBlur(data []float32, w, h int, sigma float64) []float32 {
 
 	// Horizontal pass.
 	tmp := make([]float32, w*h)
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			var v float64
 			for k := -radius; k <= radius; k++ {
 				sx := x + k
@@ -436,8 +436,8 @@ func gaussianBlur(data []float32, w, h int, sigma float64) []float32 {
 
 	// Vertical pass.
 	out := make([]float32, w*h)
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			var v float64
 			for k := -radius; k <= radius; k++ {
 				sy := y + k

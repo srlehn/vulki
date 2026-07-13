@@ -11,14 +11,14 @@ func TestGPUTypeContainsPointer(t *testing.T) {
 		typeOf reflect.Type
 		want   bool
 	}{
-		{name: "float array", typeOf: reflect.TypeOf([2]float32{}), want: false},
-		{name: "numeric struct", typeOf: reflect.TypeOf(struct {
+		{name: "float array", typeOf: reflect.TypeFor[[2]float32](), want: false},
+		{name: "numeric struct", typeOf: reflect.TypeFor[struct {
 			X uint32
 			Y float32
-		}{}), want: false},
-		{name: "string", typeOf: reflect.TypeOf(""), want: true},
-		{name: "slice", typeOf: reflect.TypeOf([]uint32{}), want: true},
-		{name: "nested pointer", typeOf: reflect.TypeOf(struct{ Values [2]*uint32 }{}), want: true},
+		}](), want: false},
+		{name: "string", typeOf: reflect.TypeFor[string](), want: true},
+		{name: "slice", typeOf: reflect.TypeFor[[]uint32](), want: true},
+		{name: "nested pointer", typeOf: reflect.TypeFor[struct{ Values [2]*uint32 }](), want: true},
 	}
 
 	for _, test := range tests {

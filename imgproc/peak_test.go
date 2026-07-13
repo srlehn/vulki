@@ -92,8 +92,8 @@ func TestFind2DPeak_SubpixelRefinement(t *testing.T) {
 	w, h := 32, 32
 	data := make([][2]float32, w*h)
 	cx, cy := 5.3, 10.2
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
+	for y := range h {
+		for x := range w {
 			dx := float64(x) - cx
 			dy := float64(y) - cy
 			val := float32(math.Max(0, 100-dx*dx-dy*dy))
@@ -167,8 +167,8 @@ func TestRealToComplex(t *testing.T) {
 
 func TestPackRGBAHandlesSubimageStrideAndBounds(t *testing.T) {
 	parent := image.NewRGBA(image.Rect(0, 0, 4, 4))
-	for y := 0; y < 4; y++ {
-		for x := 0; x < 4; x++ {
+	for y := range 4 {
+		for x := range 4 {
 			parent.SetRGBA(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: uint8(x + y), A: 255})
 		}
 	}
@@ -181,8 +181,8 @@ func TestPackRGBAHandlesSubimageStrideAndBounds(t *testing.T) {
 	if len(packed) != 4 {
 		t.Fatalf("packed length = %d, want 4", len(packed))
 	}
-	for y := 0; y < 2; y++ {
-		for x := 0; x < 2; x++ {
+	for y := range 2 {
+		for x := range 2 {
 			pixel := sub.RGBAAt(x+1, y+1)
 			want := uint32(pixel.R) | uint32(pixel.G)<<8 | uint32(pixel.B)<<16 | uint32(pixel.A)<<24
 			if got := packed[y*2+x]; got != want {

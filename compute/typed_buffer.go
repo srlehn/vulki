@@ -127,7 +127,7 @@ func (tb *TypedBuffer[T]) validate() error {
 }
 
 func validateGPUValueType[T any]() error {
-	t := reflect.TypeOf((*T)(nil)).Elem()
+	t := reflect.TypeFor[T]()
 	if gpuTypeContainsPointer(t) {
 		return fmt.Errorf("compute: type %s contains Go pointers and cannot be stored in a GPU buffer", t)
 	}
@@ -139,8 +139,8 @@ func gpuTypeContainsPointer(t reflect.Type) bool {
 	case reflect.Array:
 		return gpuTypeContainsPointer(t.Elem())
 	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
-			if gpuTypeContainsPointer(t.Field(i).Type) {
+		for field := range t.Fields() {
+			if gpuTypeContainsPointer(field.Type) {
 				return true
 			}
 		}

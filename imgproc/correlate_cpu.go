@@ -139,8 +139,8 @@ func grayCropPadCPU(pixels []uint32, srcW, srcH, cropSize, padSize int) []float6
 	srcOffsetX := (srcW - cropSize) / 2
 	srcOffsetY := (srcH - cropSize) / 2
 	padOffset := (padSize - cropSize) / 2
-	for y := 0; y < cropSize; y++ {
-		for x := 0; x < cropSize; x++ {
+	for y := range cropSize {
+		for x := range cropSize {
 			rgba := pixels[(y+srcOffsetY)*srcW+x+srcOffsetX]
 			r := float64(rgba&0xff) / 255.0
 			g := float64((rgba>>8)&0xff) / 255.0
@@ -159,9 +159,9 @@ func magnitudeSpectrumCPU(gray []float64, width, height int) []float64 {
 		magnitude[i] = math.Log1p(cmplx.Abs(value))
 	}
 	fftShiftCPU(magnitude, width, height)
-	for y := 0; y < height; y++ {
+	for y := range height {
 		eta := float64(y)/float64(height) - 0.5
-		for x := 0; x < width; x++ {
+		for x := range width {
 			xi := float64(x)/float64(width) - 0.5
 			spectralX := math.Cos(math.Pi*xi) * math.Cos(math.Pi*eta)
 			highpass := (1 - spectralX) * (2 - spectralX)
@@ -174,8 +174,8 @@ func magnitudeSpectrumCPU(gray []float64, width, height int) []float64 {
 func fftShiftCPU(values []float64, width, height int) {
 	halfWidth := width / 2
 	halfHeight := height / 2
-	for y := 0; y < halfHeight; y++ {
-		for x := 0; x < width; x++ {
+	for y := range halfHeight {
+		for x := range width {
 			oppositeX := (x + halfWidth) % width
 			oppositeY := (y + halfHeight) % height
 			first := y*width + x
@@ -194,9 +194,9 @@ func logPolarCPU(
 	logRadius := math.Log(maxRadius)
 	centerX := float64(srcW) / 2.0
 	centerY := float64(srcH) / 2.0
-	for y := 0; y < dstH; y++ {
+	for y := range dstH {
 		theta := float64(y) / float64(dstH) * math.Pi
-		for x := 0; x < dstW; x++ {
+		for x := range dstW {
 			radius := math.Exp(float64(x) / float64(dstW) * logRadius)
 			sampleX := centerX + radius*math.Cos(theta)
 			sampleY := centerY + radius*math.Sin(theta)
@@ -244,8 +244,8 @@ func phaseCorrelationCPU(a, b []complex128, width, height int) (float64, float64
 func findPeakCPU(values []complex128, width, height int) (float64, float64, float64) {
 	maxMagnitude := -1.0
 	maxX, maxY := 0, 0
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
+	for y := range height {
+		for x := range width {
 			magnitude := cmplx.Abs(values[y*width+x])
 			if magnitude > maxMagnitude {
 				maxMagnitude = magnitude
@@ -282,16 +282,16 @@ func findPeakCPU(values []complex128, width, height int) (float64, float64, floa
 }
 
 func fft2DCPU(values []complex128, width, height int, inverse bool) {
-	for y := 0; y < height; y++ {
+	for y := range height {
 		fft1DCPU(values[y*width:(y+1)*width], inverse)
 	}
 	column := make([]complex128, height)
-	for x := 0; x < width; x++ {
-		for y := 0; y < height; y++ {
+	for x := range width {
+		for y := range height {
 			column[y] = values[y*width+x]
 		}
 		fft1DCPU(column, inverse)
-		for y := 0; y < height; y++ {
+		for y := range height {
 			values[y*width+x] = column[y]
 		}
 	}
@@ -318,7 +318,7 @@ func fft1DCPU(values []complex128, inverse bool) {
 		for start := 0; start < n; start += length {
 			factor := complex(1.0, 0)
 			half := length / 2
-			for offset := 0; offset < half; offset++ {
+			for offset := range half {
 				even := values[start+offset]
 				odd := values[start+offset+half] * factor
 				values[start+offset] = even + odd

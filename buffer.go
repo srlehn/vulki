@@ -516,7 +516,7 @@ func (d *Device) copyBufferAndWait(
 
 func findMemoryType(properties vk.PhysicalDeviceMemoryProperties, typeBits uint32, required vk.MemoryPropertyFlags) (uint32, error) {
 	count := min(properties.MemoryTypeCount, uint32(len(properties.MemoryTypes)))
-	for index := uint32(0); index < count; index++ {
+	for index := range count {
 		memoryType := properties.MemoryTypes[index]
 		if typeBits&(1<<index) != 0 && memoryType.PropertyFlags&required == required {
 			return index, nil

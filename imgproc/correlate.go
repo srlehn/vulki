@@ -517,9 +517,9 @@ func packRGBA(img *image.RGBA) ([]uint32, error) {
 	}
 
 	pixels := make([]uint32, w*h)
-	for y := 0; y < h; y++ {
+	for y := range h {
 		row := img.Pix[y*img.Stride : y*img.Stride+rowBytes]
-		for x := 0; x < w; x++ {
+		for x := range w {
 			off := x * 4
 			pixels[y*w+x] = uint32(row[off]) |
 				uint32(row[off+1])<<8 |

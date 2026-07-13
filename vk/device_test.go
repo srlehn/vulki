@@ -219,7 +219,7 @@ func TestLoadDeviceFuncsFailureOwnershipMatrix(t *testing.T) {
 			},
 		}
 
-		functions, err := loadDeviceFuncs(instanceFunctions, Device(1), func(target interface{}, _ uintptr) {
+		functions, err := loadDeviceFuncs(instanceFunctions, Device(1), func(target any, _ uintptr) {
 			if destroy, ok := target.(*func(Device, uintptr)); ok {
 				*destroy = func(Device, uintptr) { destroyed = true }
 			}

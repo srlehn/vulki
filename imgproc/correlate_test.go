@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/cmplx"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/srlehn/vulki/compute"
@@ -177,7 +178,7 @@ func TestFFT_KnownSpectrum(t *testing.T) {
 
 	t.Log("FFT of delta: ", output[:n])
 	// All values should be (1, 0).
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if math.Abs(float64(output[i][0])-1) > 1e-5 || math.Abs(float64(output[i][1])) > 1e-5 {
 			t.Errorf("FFT[%d] = (%v, %v), want (1, 0)", i, output[i][0], output[i][1])
 		}
@@ -317,9 +318,9 @@ func TestHighpass(t *testing.T) {
 
 	// Verify the paper's H(xi,eta) = (1-X)(2-X), where
 	// X = cos(pi*xi)cos(pi*eta) and the shifted DC is at the center.
-	for y := 0; y < h; y++ {
+	for y := range h {
 		eta := float64(y)/float64(h) - 0.5
-		for x := 0; x < w; x++ {
+		for x := range w {
 			xi := float64(x)/float64(w) - 0.5
 			spectralX := math.Cos(math.Pi*xi) * math.Cos(math.Pi*eta)
 			want := (1 - spectralX) * (2 - spectralX)
@@ -330,7 +331,7 @@ func TestHighpass(t *testing.T) {
 	}
 
 	t.Logf("highpass output:\n")
-	for y := 0; y < h; y++ {
+	for y := range h {
 		t.Logf("  row %d: %v", y, output[y*w:(y+1)*w])
 	}
 }
@@ -402,7 +403,7 @@ func TestCrosspower_IdenticalSignals(t *testing.T) {
 	}
 
 	// A * conj(A) = |A|^2 (real, positive), so normalized result should be (1, 0).
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if math.Abs(float64(output[i][0])-1) > 1e-3 || math.Abs(float64(output[i][1])) > 1e-3 {
 			t.Errorf("crosspower[%d] = (%v, %v), want (1, 0)", i, output[i][0], output[i][1])
 		}
@@ -788,11 +789,11 @@ func TestLogPolar_SamplesFromDC(t *testing.T) {
 
 	// Log some of the output for debugging.
 	t.Log("Log-polar from DC-only spectrum (first row):")
-	for x := 0; x < dstW; x++ {
+	for x := range dstW {
 		t.Logf("  lp[%d,0] = %v", x, output[x][0])
 	}
 	t.Log("Log-polar from Nyquist-only spectrum (first row):")
-	for x := 0; x < dstW; x++ {
+	for x := range dstW {
 		t.Logf("  lp[%d,0] = %v", x, output2[x][0])
 	}
 }
@@ -937,7 +938,7 @@ func cpuFFT1D(data []complex128) {
 	for v := n; v > 1; v >>= 1 {
 		bits++
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		j := 0
 		for b := 0; b < bits; b++ {
 			j = (j << 1) | ((i >> b) & 1)
@@ -1018,7 +1019,7 @@ func TestFFT_MatchesCPUReference(t *testing.T) {
 	}
 
 	maxErr := 0.0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		dr := math.Abs(float64(output[i][0]) - real(cpuInput[i]))
 		di := math.Abs(float64(output[i][1]) - imag(cpuInput[i]))
 		maxErr = math.Max(maxErr, math.Max(dr, di))
@@ -1103,7 +1104,7 @@ func TestPipeline_DumpIntermediates(t *testing.T) {
 		}
 	}
 	t.Log("=== FFT output (first row) ===")
-	for x := 0; x < w; x++ {
+	for x := range w {
 		t.Logf("  FFT[%d,0] = (%v, %v)", x, fftData[x][0], fftData[x][1])
 	}
 
@@ -1131,12 +1132,13 @@ func TestPipeline_DumpIntermediates(t *testing.T) {
 		}
 	}
 	t.Log("=== Magnitude (all) ===")
-	for y := 0; y < h; y++ {
-		row := fmt.Sprintf("  mag[*,%d] =", y)
-		for x := 0; x < w; x++ {
-			row += fmt.Sprintf(" %.2f", magData[y*w+x])
+	for y := range h {
+		var row strings.Builder
+		row.WriteString(fmt.Sprintf("  mag[*,%d] =", y))
+		for x := range w {
+			row.WriteString(fmt.Sprintf(" %.2f", magData[y*w+x]))
 		}
-		t.Log(row)
+		t.Log(row.String())
 	}
 
 	// Verify DC is at (0,0).
@@ -1172,11 +1174,12 @@ func TestPipeline_DumpIntermediates(t *testing.T) {
 		}
 	}
 	t.Log("=== Log-polar output ===")
-	for y := 0; y < h; y++ {
-		row := fmt.Sprintf("  lp[*,%d] =", y)
-		for x := 0; x < w; x++ {
-			row += fmt.Sprintf(" %.2f", lpData[y*w+x][0])
+	for y := range h {
+		var row strings.Builder
+		row.WriteString(fmt.Sprintf("  lp[*,%d] =", y))
+		for x := range w {
+			row.WriteString(fmt.Sprintf(" %.2f", lpData[y*w+x][0]))
 		}
-		t.Log(row)
+		t.Log(row.String())
 	}
 }

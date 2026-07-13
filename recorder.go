@@ -2,6 +2,7 @@ package vulki
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"unsafe"
 
@@ -322,20 +323,16 @@ func (r *Recorder) requireRecording() error {
 }
 
 func (r *Recorder) retainBufferLocked(buffer *Buffer) {
-	for _, retained := range r.buffers {
-		if retained == buffer {
-			return
-		}
+	if slices.Contains(r.buffers, buffer) {
+		return
 	}
 	buffer.references++
 	r.buffers = append(r.buffers, buffer)
 }
 
 func (r *Recorder) retainBindingSet(set *BindingSet) {
-	for _, retained := range r.bindingSets {
-		if retained == set {
-			return
-		}
+	if slices.Contains(r.bindingSets, set) {
+		return
 	}
 	set.recorders++
 	r.bindingSets = append(r.bindingSets, set)

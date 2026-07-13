@@ -60,7 +60,7 @@ func LoadDeviceFuncs(instFuncs *InstanceFuncs, device Device) (*DeviceFuncs, err
 	return loadDeviceFuncs(instFuncs, device, purego.RegisterFunc)
 }
 
-func loadDeviceFuncs(instFuncs *InstanceFuncs, device Device, register func(interface{}, uintptr)) (*DeviceFuncs, error) {
+func loadDeviceFuncs(instFuncs *InstanceFuncs, device Device, register func(any, uintptr)) (*DeviceFuncs, error) {
 	if instFuncs == nil || instFuncs.getDeviceProcAddr == nil {
 		return nil, fmt.Errorf("vk: instance functions are not loaded")
 	}
@@ -69,7 +69,7 @@ func loadDeviceFuncs(instFuncs *InstanceFuncs, device Device, register func(inte
 	}
 	f := &DeviceFuncs{}
 
-	resolve := func(target interface{}, name string) error {
+	resolve := func(target any, name string) error {
 		addr := instFuncs.GetDeviceProcAddr(device, name)
 		if addr == 0 {
 			return fmt.Errorf("vk: device function %s not found", name)
@@ -79,7 +79,7 @@ func loadDeviceFuncs(instFuncs *InstanceFuncs, device Device, register func(inte
 	}
 
 	type entry struct {
-		target interface{}
+		target any
 		name   string
 	}
 	// Resolve destruction first so the caller can release its device after a

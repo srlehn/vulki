@@ -44,7 +44,7 @@ func LoadInstanceFuncs(l *Loader, instance Instance) (*InstanceFuncs, error) {
 	return loadInstanceFuncs(l, instance, purego.RegisterFunc)
 }
 
-func loadInstanceFuncs(l *Loader, instance Instance, register func(interface{}, uintptr)) (*InstanceFuncs, error) {
+func loadInstanceFuncs(l *Loader, instance Instance, register func(any, uintptr)) (*InstanceFuncs, error) {
 	if l == nil {
 		return nil, fmt.Errorf("vk: nil loader")
 	}
@@ -53,7 +53,7 @@ func loadInstanceFuncs(l *Loader, instance Instance, register func(interface{}, 
 	}
 	f := &InstanceFuncs{}
 
-	resolve := func(target interface{}, name string) error {
+	resolve := func(target any, name string) error {
 		addr := l.GetInstanceProcAddr(instance, name)
 		if addr == 0 {
 			return fmt.Errorf("vk: %s not found", name)
@@ -69,7 +69,7 @@ func loadInstanceFuncs(l *Loader, instance Instance, register func(interface{}, 
 	}
 
 	entries := []struct {
-		target interface{}
+		target any
 		name   string
 	}{
 		{&f.enumeratePhysicalDevices, "vkEnumeratePhysicalDevices"},
