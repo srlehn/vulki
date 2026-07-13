@@ -1,14 +1,23 @@
-package wgsl
+package parser
 
 import (
 	"fmt"
 )
 
+// Parser error message constants.
+const (
+	errExpectedParameterName = "expected parameter name"
+	errExpectedMemberName    = "expected member name"
+	errExpectedVariableName  = "expected variable name"
+	errExpectedType          = "expected type"
+)
+
 // Parser parses WGSL tokens into an AST.
 type Parser struct {
-	tokens  []Token
-	current int
-	errors  []ParseError
+	tokens      []Token
+	current     int
+	errors      []ParseError
+	inForHeader bool // true when parsing for-loop init/update (no trailing semicolon)
 }
 
 // ParseError represents a parsing error.
@@ -31,7 +40,17 @@ func NewParser(tokens []Token) *Parser {
 
 // Parse parses the tokens and returns a Module AST.
 func (p *Parser) Parse() (*Module, error) {
+	// Estimate declaration counts from token count for pre-allocation.
+	// Only pre-allocate for shaders with enough tokens to benefit from
+	// avoiding slice regrowth. Small shaders (< ~100 tokens) are fine
+	// with nil slice append growth.
+	nTokens := len(p.tokens)
 	module := &Module{}
+	if nTokens > 100 {
+		estDecls := nTokens/20 + 1
+		module.Declarations = make([]Decl, 0, estDecls)
+		module.Functions = make([]*FunctionDecl, 0, estDecls/3+1)
+	}
 
 	for !p.isAtEnd() {
 		// Skip optional semicolons between declarations (e.g., struct Foo { ... };)
@@ -48,6 +67,8 @@ func (p *Parser) Parse() (*Module, error) {
 			continue
 		}
 		if decl != nil {
+			// Preserve source order for all declarations.
+			module.Declarations = append(module.Declarations, decl)
 			switch d := decl.(type) {
 			case *FunctionDecl:
 				module.Functions = append(module.Functions, d)
@@ -59,6 +80,8 @@ func (p *Parser) Parse() (*Module, error) {
 				module.Constants = append(module.Constants, d)
 			case *AliasDecl:
 				module.Aliases = append(module.Aliases, d)
+			case *OverrideDecl:
+				module.Overrides = append(module.Overrides, d)
 			}
 		}
 	}
@@ -88,6 +111,8 @@ func (p *Parser) declaration() (Decl, *ParseError) {
 		return p.letDecl()
 	case p.check(TokenAlias):
 		return p.aliasDecl()
+	case p.check(TokenConstAssert):
+		return p.constAssertDecl()
 	case p.check(TokenEnable):
 		// Skip enable directives for now
 		p.advance()
@@ -98,6 +123,18 @@ func (p *Parser) declaration() (Decl, *ParseError) {
 			p.advance()
 		}
 		return nil, nil
+	case p.check(TokenDiagnostic):
+		// Skip diagnostic directives for now
+		p.advance()
+		for !p.check(TokenSemicolon) && !p.isAtEnd() {
+			p.advance()
+		}
+		if p.check(TokenSemicolon) {
+			p.advance()
+		}
+		return nil, nil
+	case p.check(TokenOverride):
+		return p.overrideDecl(attrs)
 	case p.check(TokenEOF):
 		return nil, nil
 	default:
@@ -117,7 +154,9 @@ func (p *Parser) attributes() []Attribute {
 		start := p.peek()
 		p.advance() // consume @
 
-		if !p.check(TokenIdent) {
+		// Accept both identifiers and keyword tokens as attribute names.
+		// E.g., @diagnostic(...) — "diagnostic" is a keyword but valid as attr name.
+		if !p.check(TokenIdent) && !p.check(TokenDiagnostic) {
 			continue
 		}
 
@@ -222,7 +261,7 @@ func (p *Parser) parameter() (*Parameter, *ParseError) {
 	attrs := p.attributes()
 
 	if !p.check(TokenIdent) {
-		return nil, &ParseError{Message: "expected parameter name", Token: p.peek()}
+		return nil, &ParseError{Message: errExpectedParameterName, Token: p.peek()}
 	}
 	name := p.advance()
 
@@ -246,7 +285,7 @@ func (p *Parser) parameter() (*Parameter, *ParseError) {
 }
 
 // structDecl parses a struct declaration.
-func (p *Parser) structDecl(attrs []Attribute) (*StructDecl, *ParseError) {
+func (p *Parser) structDecl(_ []Attribute) (*StructDecl, *ParseError) {
 	start := p.peek()
 	if !p.match(TokenStruct) {
 		return nil, &ParseError{Message: "expected 'struct'", Token: p.peek()}
@@ -291,7 +330,7 @@ func (p *Parser) structMember() (*StructMember, *ParseError) {
 	attrs := p.attributes()
 
 	if !p.check(TokenIdent) {
-		return nil, &ParseError{Message: "expected member name", Token: p.peek()}
+		return nil, &ParseError{Message: errExpectedMemberName, Token: p.peek()}
 	}
 	name := p.advance()
 
@@ -338,7 +377,7 @@ func (p *Parser) varDecl(attrs []Attribute) (*VarDecl, *ParseError) {
 	}
 
 	if !p.check(TokenIdent) {
-		return nil, &ParseError{Message: "expected variable name", Token: p.peek()}
+		return nil, &ParseError{Message: errExpectedVariableName, Token: p.peek()}
 	}
 	name := p.advance()
 
@@ -362,7 +401,9 @@ func (p *Parser) varDecl(attrs []Attribute) (*VarDecl, *ParseError) {
 		init = e
 	}
 
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 
 	return &VarDecl{
 		Name:         name.Lexeme,
@@ -408,12 +449,15 @@ func (p *Parser) constDecl() (*ConstDecl, *ParseError) {
 		return nil, err
 	}
 
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 
 	return &ConstDecl{
-		Name: name.Lexeme,
-		Type: constType,
-		Init: init,
+		Name:    name.Lexeme,
+		Type:    constType,
+		Init:    init,
+		IsConst: true,
 		Span: Span{
 			Start: Position{Line: start.Line, Column: start.Column},
 		},
@@ -428,7 +472,7 @@ func (p *Parser) letDecl() (*ConstDecl, *ParseError) {
 	}
 
 	if !p.check(TokenIdent) {
-		return nil, &ParseError{Message: "expected variable name", Token: p.peek()}
+		return nil, &ParseError{Message: errExpectedVariableName, Token: p.peek()}
 	}
 	name := p.advance()
 
@@ -451,12 +495,63 @@ func (p *Parser) letDecl() (*ConstDecl, *ParseError) {
 		return nil, err
 	}
 
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 
 	return &ConstDecl{
 		Name: name.Lexeme,
 		Type: letType,
 		Init: init,
+		Span: Span{
+			Start: Position{Line: start.Line, Column: start.Column},
+		},
+	}, nil
+}
+
+// overrideDecl parses an override declaration (pipeline-overridable constant).
+// WGSL spec: @id(N) override name: type = default;
+// The initializer is optional (overrides without defaults must be set at pipeline creation).
+func (p *Parser) overrideDecl(attrs []Attribute) (*OverrideDecl, *ParseError) {
+	start := p.peek()
+	if !p.match(TokenOverride) {
+		return nil, &ParseError{Message: "expected 'override'", Token: p.peek()}
+	}
+
+	if !p.check(TokenIdent) {
+		return nil, &ParseError{Message: "expected override name", Token: p.peek()}
+	}
+	name := p.advance()
+
+	// Optional type annotation
+	var overrideType Type
+	if p.match(TokenColon) {
+		t, err := p.typeSpec()
+		if err != nil {
+			return nil, err
+		}
+		overrideType = t
+	}
+
+	// Optional initializer
+	var init Expr
+	if p.match(TokenEqual) {
+		expr, err := p.expression()
+		if err != nil {
+			return nil, err
+		}
+		init = expr
+	}
+
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+
+	return &OverrideDecl{
+		Name:       name.Lexeme,
+		Type:       overrideType,
+		Init:       init,
+		Attributes: attrs,
 		Span: Span{
 			Start: Position{Line: start.Line, Column: start.Column},
 		},
@@ -484,11 +579,45 @@ func (p *Parser) aliasDecl() (*AliasDecl, *ParseError) {
 		return nil, err
 	}
 
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 
 	return &AliasDecl{
 		Name: name.Lexeme,
 		Type: aliasType,
+		Span: Span{
+			Start: Position{Line: start.Line, Column: start.Column},
+		},
+	}, nil
+}
+
+// constAssertDecl parses a const_assert declaration.
+// WGSL spec: const_assert expr; or const_assert(expr);
+func (p *Parser) constAssertDecl() (*ConstAssertDecl, *ParseError) {
+	start := p.peek()
+	if !p.match(TokenConstAssert) {
+		return nil, &ParseError{Message: "expected 'const_assert'", Token: p.peek()}
+	}
+
+	// const_assert can optionally have parentheses: const_assert(expr) or const_assert expr
+	hasParen := p.match(TokenLeftParen)
+	cond, err := p.expression()
+	if err != nil {
+		return nil, err
+	}
+	if hasParen {
+		if err := p.expectErr(TokenRightParen); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
+
+	return &ConstAssertDecl{
+		Condition: cond,
 		Span: Span{
 			Start: Position{Line: start.Line, Column: start.Column},
 		},
@@ -512,14 +641,21 @@ func (p *Parser) typeSpec() (Type, *ParseError) {
 
 			var size Expr
 			if p.match(TokenComma) {
-				// Parse only primary expression for size to avoid > being interpreted as comparison
-				size, err = p.primary()
-				if err != nil {
-					return nil, err
+				// Trailing comma without size: array<u32,>
+				if !p.check(TokenGreater) {
+					// Parse a template argument expression for size.
+					// This uses templateArgExpr which handles shift/arithmetic but
+					// stops before > or >= to avoid consuming the template closing >.
+					size, err = p.templateArgExpr()
+					if err != nil {
+						return nil, err
+					}
+					// Allow trailing comma after size: array<u32, 1,>
+					p.match(TokenComma)
 				}
 			}
 
-			if err := p.expectErr(TokenGreater); err != nil {
+			if err := p.expectTemplateClose(); err != nil {
 				return nil, err
 			}
 
@@ -533,7 +669,7 @@ func (p *Parser) typeSpec() (Type, *ParseError) {
 		}
 		// No template args: array(...) with inferred type — return as NamedType
 		return &NamedType{
-			Name: "array",
+			Name: "array", //nolint:goconst // WGSL intrinsic type name, also used in lower.go
 			Span: Span{
 				Start: Position{Line: tok.Line, Column: tok.Column},
 			},
@@ -643,7 +779,7 @@ func (p *Parser) typeSpec() (Type, *ParseError) {
 		return namedType, nil
 	}
 
-	return nil, &ParseError{Message: "expected type", Token: tok}
+	return nil, &ParseError{Message: errExpectedType, Token: tok}
 }
 
 // block parses a block statement.
@@ -703,6 +839,8 @@ func (p *Parser) statement() (Stmt, *ParseError) {
 		return p.letStmt()
 	case p.check(TokenConst):
 		return p.localConstStmt()
+	case p.check(TokenConstAssert):
+		return p.constAssertDecl()
 	case p.check(TokenLeftBrace):
 		return p.block()
 	default:
@@ -723,7 +861,9 @@ func (p *Parser) returnStmt() (*ReturnStmt, *ParseError) {
 		value = e
 	}
 
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 
 	return &ReturnStmt{
 		Value: value,
@@ -777,16 +917,19 @@ func (p *Parser) forStmt() (*ForStmt, *ParseError) {
 		return nil, err
 	}
 
-	// Init
+	// Init — parsed without trailing semicolon (for-loop uses ; as separator)
 	var init Stmt
 	if !p.check(TokenSemicolon) {
+		p.inForHeader = true
 		s, err := p.statement()
+		p.inForHeader = false
 		if err != nil {
 			return nil, err
 		}
 		init = s
-	} else {
-		p.advance()
+	}
+	if err := p.expectErr(TokenSemicolon); err != nil {
+		return nil, err
 	}
 
 	// Condition
@@ -798,12 +941,16 @@ func (p *Parser) forStmt() (*ForStmt, *ParseError) {
 		}
 		cond = e
 	}
-	p.match(TokenSemicolon)
+	if err := p.expectErr(TokenSemicolon); err != nil {
+		return nil, err
+	}
 
-	// Update
+	// Update — parsed without trailing semicolon (for-loop ends with ))
 	var update Stmt
 	if !p.check(TokenRightParen) {
+		p.inForHeader = true
 		s, err := p.statement()
+		p.inForHeader = false
 		if err != nil {
 			return nil, err
 		}
@@ -955,6 +1102,7 @@ func (p *Parser) switchCaseClause() (*SwitchCaseClause, *ParseError) {
 	start := p.peek()
 	var selectors []Expr
 	isDefault := false
+	defaultFirst := false
 
 	if p.match(TokenDefault) {
 		isDefault = true
@@ -966,6 +1114,9 @@ func (p *Parser) switchCaseClause() (*SwitchCaseClause, *ParseError) {
 			if p.check(TokenDefault) {
 				p.advance()
 				isDefault = true
+				if len(selectors) == 0 {
+					defaultFirst = true
+				}
 			} else {
 				// Stop if the next token starts the body (trailing comma case)
 				if p.check(TokenColon) || p.check(TokenLeftBrace) {
@@ -994,9 +1145,10 @@ func (p *Parser) switchCaseClause() (*SwitchCaseClause, *ParseError) {
 	}
 
 	return &SwitchCaseClause{
-		Selectors: selectors,
-		IsDefault: isDefault,
-		Body:      body,
+		Selectors:    selectors,
+		IsDefault:    isDefault,
+		DefaultFirst: defaultFirst,
+		Body:         body,
 		Span: Span{
 			Start: Position{Line: start.Line, Column: start.Column},
 		},
@@ -1008,10 +1160,32 @@ func (p *Parser) localConstStmt() (*ConstDecl, *ParseError) {
 	return p.constDecl()
 }
 
-// breakStmt parses a break statement.
-func (p *Parser) breakStmt() (*BreakStmt, *ParseError) {
+// breakStmt parses a break or "break if" statement.
+// WGSL spec: "break if expr;" is valid inside a continuing block.
+func (p *Parser) breakStmt() (Stmt, *ParseError) {
 	start := p.advance() // consume 'break'
-	p.match(TokenSemicolon)
+
+	// Check for "break if expr;" syntax (inside continuing block)
+	if p.check(TokenIf) {
+		p.advance() // consume 'if'
+		cond, err := p.expression()
+		if err != nil {
+			return nil, err
+		}
+		if err := p.expectSemicolon(); err != nil {
+			return nil, err
+		}
+		return &BreakIfStmt{
+			Condition: cond,
+			Span: Span{
+				Start: Position{Line: start.Line, Column: start.Column},
+			},
+		}, nil
+	}
+
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 	return &BreakStmt{
 		Span: Span{
 			Start: Position{Line: start.Line, Column: start.Column},
@@ -1022,7 +1196,9 @@ func (p *Parser) breakStmt() (*BreakStmt, *ParseError) {
 // continueStmt parses a continue statement.
 func (p *Parser) continueStmt() (*ContinueStmt, *ParseError) {
 	start := p.advance() // consume 'continue'
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 	return &ContinueStmt{
 		Span: Span{
 			Start: Position{Line: start.Line, Column: start.Column},
@@ -1033,7 +1209,9 @@ func (p *Parser) continueStmt() (*ContinueStmt, *ParseError) {
 // discardStmt parses a discard statement.
 func (p *Parser) discardStmt() (*DiscardStmt, *ParseError) {
 	start := p.advance() // consume 'discard'
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 	return &DiscardStmt{
 		Span: Span{
 			Start: Position{Line: start.Line, Column: start.Column},
@@ -1047,7 +1225,7 @@ func (p *Parser) letStmt() (*ConstDecl, *ParseError) {
 	p.advance() // consume 'let'
 
 	if !p.check(TokenIdent) {
-		return nil, &ParseError{Message: "expected variable name", Token: p.peek()}
+		return nil, &ParseError{Message: errExpectedVariableName, Token: p.peek()}
 	}
 	name := p.advance()
 
@@ -1069,7 +1247,9 @@ func (p *Parser) letStmt() (*ConstDecl, *ParseError) {
 		return nil, err
 	}
 
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 
 	return &ConstDecl{
 		Name: name.Lexeme,
@@ -1097,7 +1277,9 @@ func (p *Parser) exprOrAssignStmt() (Stmt, *ParseError) {
 			op = TokenMinusEqual
 		}
 		p.advance() // consume ++ or --
-		p.match(TokenSemicolon)
+		if err := p.expectSemicolon(); err != nil {
+			return nil, err
+		}
 		return &AssignStmt{
 			Left: expr,
 			Op:   op,
@@ -1118,7 +1300,9 @@ func (p *Parser) exprOrAssignStmt() (Stmt, *ParseError) {
 		if err != nil {
 			return nil, err
 		}
-		p.match(TokenSemicolon)
+		if err := p.expectSemicolon(); err != nil {
+			return nil, err
+		}
 		return &AssignStmt{
 			Left:  expr,
 			Op:    op.Kind,
@@ -1129,7 +1313,9 @@ func (p *Parser) exprOrAssignStmt() (Stmt, *ParseError) {
 		}, nil
 	}
 
-	p.match(TokenSemicolon)
+	if err := p.expectSemicolon(); err != nil {
+		return nil, err
+	}
 	return &ExprStmt{
 		Expr: expr,
 		Span: Span{
@@ -1141,6 +1327,37 @@ func (p *Parser) exprOrAssignStmt() (Stmt, *ParseError) {
 // expression parses an expression.
 func (p *Parser) expression() (Expr, *ParseError) {
 	return p.logicalOr()
+}
+
+// templateArgExpr parses an expression inside a template argument list.
+// It handles shift/arithmetic operators but stops at > and >= tokens
+// to avoid consuming the template-closing >.
+func (p *Parser) templateArgExpr() (Expr, *ParseError) {
+	return p.templateShift()
+}
+
+// templateShift parses << expressions inside template args (>> would be template close).
+func (p *Parser) templateShift() (Expr, *ParseError) {
+	left, err := p.additive()
+	if err != nil {
+		return nil, err
+	}
+
+	// Only allow left-shift (<<) inside template args, not right-shift (>>)
+	for p.check(TokenLessLess) {
+		op := p.advance()
+		right, err := p.additive()
+		if err != nil {
+			return nil, err
+		}
+		left = &BinaryExpr{
+			Left:  left,
+			Op:    op.Kind,
+			Right: right,
+		}
+	}
+
+	return left, nil
 }
 
 // logicalOr parses || expressions.
@@ -1438,7 +1655,7 @@ func (p *Parser) postfix() (Expr, *ParseError) {
 		} else if p.match(TokenDot) {
 			// Member access
 			if !p.check(TokenIdent) {
-				return nil, &ParseError{Message: "expected member name", Token: p.peek()}
+				return nil, &ParseError{Message: errExpectedMemberName, Token: p.peek()}
 			}
 			member := p.advance()
 			expr = &MemberExpr{
@@ -1579,6 +1796,15 @@ func (p *Parser) check(kind TokenKind) bool {
 	return p.peek().Kind == kind
 }
 
+// expectSemicolon requires a semicolon unless inside a for-loop header
+// (where semicolons are separators consumed by the for-loop parser).
+func (p *Parser) expectSemicolon() *ParseError {
+	if p.inForHeader {
+		return nil
+	}
+	return p.expectErr(TokenSemicolon)
+}
+
 func (p *Parser) match(kind TokenKind) bool {
 	if p.check(kind) {
 		p.advance()
@@ -1587,17 +1813,15 @@ func (p *Parser) match(kind TokenKind) bool {
 	return false
 }
 
-func (p *Parser) expect(kind TokenKind) bool {
+func (p *Parser) expect(kind TokenKind) {
 	if p.check(kind) {
 		p.advance()
-		return true
+		return
 	}
 	// Handle >> splitting: when expecting >, accept >> and split it
 	if kind == TokenGreater && p.check(TokenGreaterGreater) {
 		p.splitGreaterGreater()
-		return true
 	}
-	return false
 }
 
 func (p *Parser) expectErr(kind TokenKind) *ParseError {
@@ -1616,6 +1840,32 @@ func (p *Parser) expectErr(kind TokenKind) *ParseError {
 	}
 }
 
+// expectTemplateClose expects a > token to close a template argument list.
+// Handles >= disambiguation: splits >= into > and = tokens per WGSL spec.
+// Also handles >> splitting like expectErr(TokenGreater).
+func (p *Parser) expectTemplateClose() *ParseError {
+	if p.check(TokenGreater) {
+		p.advance()
+		return nil
+	}
+	if p.check(TokenGreaterGreater) {
+		p.splitGreaterGreater()
+		return nil
+	}
+	if p.check(TokenGreaterEqual) {
+		p.splitGreaterEqual()
+		return nil
+	}
+	if p.check(TokenGreaterGreaterEqual) {
+		p.splitGreaterGreaterEqual()
+		return nil
+	}
+	return &ParseError{
+		Message: fmt.Sprintf("expected >, got %s", p.peek().Kind),
+		Token:   p.peek(),
+	}
+}
+
 // splitGreaterGreater splits a >> token into two > tokens, consuming the first.
 // This handles the WGSL angle bracket ambiguity in nested template args (e.g., vec3<f32>>).
 func (p *Parser) splitGreaterGreater() {
@@ -1628,6 +1878,33 @@ func (p *Parser) splitGreaterGreater() {
 		Column: tok.Column + 1,
 	}
 	// Don't advance — the remaining > stays for the outer template close
+}
+
+// splitGreaterEqual splits a >= token into > and = tokens, consuming the >.
+// This handles the WGSL template disambiguation: array<i32, 1 << 1>=...
+func (p *Parser) splitGreaterEqual() {
+	tok := p.tokens[p.current]
+	// Replace >= with = at position+1
+	p.tokens[p.current] = Token{
+		Kind:   TokenEqual,
+		Lexeme: "=",
+		Line:   tok.Line,
+		Column: tok.Column + 1,
+	}
+	// Don't advance — the = stays for the next parse
+}
+
+// splitGreaterGreaterEqual splits a >>= token into > and >= tokens, consuming the >.
+func (p *Parser) splitGreaterGreaterEqual() {
+	tok := p.tokens[p.current]
+	// Replace >>= with >= at position+1
+	p.tokens[p.current] = Token{
+		Kind:   TokenGreaterEqual,
+		Lexeme: ">=",
+		Line:   tok.Line,
+		Column: tok.Column + 1,
+	}
+	// Don't advance — the >= stays for the next parse
 }
 
 func (p *Parser) synchronize() {
@@ -1646,7 +1923,7 @@ func (p *Parser) synchronize() {
 
 func (p *Parser) isTypeKeyword(kind TokenKind) bool {
 	switch kind {
-	case TokenBool, TokenF16, TokenF32, TokenI32, TokenU32,
+	case TokenBool, TokenF16, TokenF32, TokenF64, TokenI32, TokenI64, TokenU32, TokenU64,
 		TokenVec2, TokenVec3, TokenVec4,
 		TokenMat2x2, TokenMat2x3, TokenMat2x4,
 		TokenMat3x2, TokenMat3x3, TokenMat3x4,

@@ -5,6 +5,1148 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.17.15] - 2026-06-15
+
+### Fixed (MSL)
+
+- **MSL: workgroup vars at function-body scope** (PR #77, @georgebuilds) —
+  workgroup (`threadgroup`) variables are now declared inside the kernel function
+  body (`threadgroup T name;`) instead of as entry-point parameters
+  (`threadgroup T& name`). The parameter form requires the host to call
+  `setThreadgroupMemoryLength:atIndex:` before dispatch (Rust wgpu-hal does this);
+  our Pure Go Metal HAL does not, causing workgroup memory to silently no-op.
+  Function-scope declarations are legal MSL, statically sized by the compiler,
+  and need no host-side setup. Verified on Apple M3 Max with Metal 3.1 runtime.
+  Intentional divergence from Rust naga, recorded in reference allow-list.
+- **MSL: per-entry-point workgroup zero-init filtering** — `writeWorkgroupZeroInit`
+  now filters by entry-point usage (matching Rust naga `fun_info[handle].is_empty()`),
+  so only workgroup vars actually used by the entry point are declared and zeroed.
+  Fixes latent bug where unused vars were incorrectly zero-initialized.
+
+### Changed
+
+- **CONTRIBUTING.md** — added snapshot test infrastructure documentation
+  (golden file naming convention, reference allow-list, adding new test shaders),
+  updated project structure (hlsl, dxil, snapshot, cmd/spvdis, cmd/dxilval),
+  added testing commands (TestRustReference, UPDATE_GOLDEN, SPIR-V validation).
+
+## [0.17.14] - 2026-06-08
+
+### Added (GLSL)
+
+- **GLSL version-aware binding support (BUG-GLES-005)** — GLSL backend now
+  provides full infrastructure for runtime binding fallback on GL < 4.2 drivers
+  (e.g., WSL2 Mesa d3d12 with GL 4.1 / GLSL 410). Follows Rust wgpu-hal
+  `device.rs:438-461` pattern.
+  - `SupportsExplicitLocations()` method on `Version` — gates `layout(binding=N)`
+    emission on GLSL >= 420 (desktop) or >= 310 (ES). Matches Rust naga
+    `mod.rs:213`.
+  - `UniformInfo` struct — reflection data for uniform/storage blocks (block name,
+    binding, storage flag). Populated during GLSL code generation.
+  - `TranslationInfo.Uniforms` field — carries uniform block reflection to the
+    HAL for post-link `glGetUniformBlockIndex`/`glUniformBlockBinding` assignment.
+  - `VersionES300` constant — safe minimum for OpenGL ES contexts.
+  - Writer collects `uniformInfos` during `writeUniformBlock`, `writeUniformVariable`,
+    and `writeStorageVariable` for the runtime binding fallback path.
+
+## [0.17.13] - 2026-05-08
+
+### Fixed (DXIL)
+
+- **PHI node ordering** — mem2reg Phase B phi instructions now grouped at
+  top of basic blocks before non-phi instructions. Fixes `path_count.wgsl`
+  (Vello tilecompute) IDxcValidator "PHI nodes not grouped at top of basic
+  block" error. Root cause: merged StmtEmit runs emitted low-handle regular
+  expressions before high-handle phi expressions.
+
+### Added
+
+- Test coverage waves 3-4: hlsl 70.6%, wgsl/lower 65.3%, msl 64.2%,
+  spirv 76.5%, dxil/emit 37.4%. Overall ~60%.
+
+## [0.17.12] - 2026-05-07
+
+### Changed
+
+- **ARCH-001: Internal packages refactoring** — all backends restructured
+  following DXIL pattern. Implementation moved to `internal/codegen/`,
+  public API uses real types (not aliases).
+  - `glsl/internal/codegen/` — 9 files, thin public wrapper
+  - `msl/internal/codegen/` — 10 files, thin public wrapper
+  - `hlsl/internal/codegen/` — 15 files, shared namer in `internal/backend/`
+  - `spirv/internal/codegen/` — 5 files, thin public wrapper
+  - `wgsl/internal/parser/` + `wgsl/internal/lower/` — parser/lowerer split
+  - `internal/registry/` — TypeRegistry extracted from ir/
+  - `internal/textutil/` — shared IndentWriter (DRY across glsl/hlsl/msl)
+  - Public API surface reduced from 398 to ~120 symbols
+
+### Fixed
+
+- **13 panics converted to error returns** across all backends.
+  GLSL/HLSL `exitLoop`/`exitSwitch` stack corruption, SPIR-V
+  `emitScalarType`/`addressSpaceToStorageClass`/`findTypeHandleByID`
+  and 6 more. ~200 caller sites updated.
+
+- **Unsupported stage validation** — GLSL and MSL now reject mesh/task
+  shader stages with clear error messages instead of generating invalid code.
+
+### Added
+
+- **Test coverage: 12/18 packages ≥80%**. Enterprise-quality tests with
+  hand-crafted IR modules, output verification, and regression protection.
+  - 100%: internal/textutil, dxil/internal/module
+  - 96.6%: internal/backend
+  - 92.9%: dxil/passes/mem2reg
+  - 88.6%: dxil/passes/dce
+  - 83.8%: wgsl/parser, dxil/bitcode
+  - 83.0%: dxil/viewid, dxil/passes/sroa
+  - 81.1%: ir
+  - 80.6%: glsl/codegen, 80.8%: dxil/container
+
+## [0.17.11] - 2026-05-06
+
+### Fixed (DXIL)
+
+- **Array-of-vector flattening** ([BUG-DXIL-041](docs/dev/kanban/1-next/BUG-DXIL-041-fine-wgsl-invalid-record.md)).
+  `array<vec4<f32>, N>` locals caused "Invalid record" from IDxcValidator.
+  Three coordinated bugs: (1) GEP index not scaled by vector width,
+  (2) single-scalar load instead of multi-scalar vector load,
+  (3) garbage component IDs from missing `pendingComponents`. Fixed via
+  `tryLoadVectorFromFlatArray()` and `scaleIndexForVecArray()`.
+  Reported by wgpu agent via `fine.wgsl` (tilecompute blend stack).
+
+### Metrics
+
+- gg production: 58/59 → **61/61 (0 failures)** 🏆
+- DXC golden diff=0: 105 (unchanged)
+- Line parity: 55.1% (unchanged)
+- IDxcValidator: 161/170 (unchanged)
+
+## [0.17.10] - 2026-04-30
+
+### Added (DXIL)
+
+- **Workgroup struct decomposition** — struct-typed groupshared variables
+  decomposed into per-member globals with MSVC-mangled suffix names.
+- **ViewID ExprAlias/ExprPhi** — precise post-mem2reg dataflow tracking
+  instead of conservative all-inputs→all-outputs fallback.
+- **Instruction scheduling infrastructure** — eval-right-first for resource
+  reads, `exprLeadsToResourceRead()`, `leafEmitPriority()`.
+- **StmtEmit range merging** — consecutive emit ranges merged for
+  cross-range reassociation.
+- **Constant folding** — int-to-float casts (`sitofp`/`uitofp`), bitcast
+  float→i32 for raw buffer stores, binary op folding infrastructure.
+- **Alignment encoding fix** — `log2(bytes)+1` for store/load/alloca/globalvar.
+- **Mul-to-shl in CBV/UAV** — byte-offset stride via `addMulOrShlInstr()`.
+- **TBAA normalizer** — strip LLVM optimization hint metadata.
+
+### Metrics
+
+- DXC golden diff=0: 104 → **105** (+1)
+- Line parity: 54.5% → **55.1%** (+0.6pp)
+
+## [0.17.9] - 2026-04-30
+
+### Added (DXIL)
+
+- **Per-member loadInput DCE** — backwards reachability analysis eliminates
+  `dx.op.loadInput` calls for unused struct input members after inlining.
+- **Zero-store local promotion** — unassigned struct members resolve to zero
+  constants, eliminating alloca/load chains.
+- **Same-type integer cast elimination** — `bitcast i32↔i32` is no-op.
+- **Sub→add canonicalization** — `sub X, C` → `add X, -C` for positive constants.
+- **Mul→shl strength reduction** — `mul X, 2^N` → `shl X, N`.
+- **QuantizeF16 via legacy ops** — `dx.op.legacyF32ToF16`/`F16ToF32` instead
+  of `fptrunc`/`fpext`. Eliminates NativeLowPrecision flag cascade (13 shaders).
+- **Int64 flag from emitted bitcode** — scans LLVM module, not IR type arena.
+- **AtomicInt64OnHeapResource flag** — 64-bit atomics on non-workgroup resources.
+- **MSVC groupshared name decoration** — `\01?name@@3typeA` format for workgroup vars.
+- **createHandle legacy path** — always use opcode 57, removed unused
+  createHandleFromBinding path.
+
+### Fixed (DXIL)
+
+- **Input sigId** — uses element index, not register row. Fixes packed inputs.
+- **ViewID StartCol** — packed linear indexing includes column offset.
+- **Cross-argument struct input ordering** — reverse signature order globally.
+
+### Metrics
+
+- DXC golden diff=0: 94 → **104** (+10)
+- Line parity: 48.1% → **54.5%** (+6.4pp)
+
+## [0.17.8] - 2026-04-30
+
+### Fixed
+
+- **Function call argument type validation** ([#66](https://github.com/gogpu/naga/issues/66)).
+  WGSL lowerer now validates argument count and types against function
+  parameters. Passing `vec2<u32>` where `u32` is expected now produces a
+  clear compile error instead of silently generating invalid shader code
+  that crashes at pipeline creation. Reported by @maxsupermanhd.
+
+- **Mandatory semicolons** — 16 places in the parser changed from optional
+  to required semicolons per WGSL grammar. `const X: u32 = 42` without `;`
+  now errors. For-loop init/update handled via `inForHeader` context flag.
+
+- **`@must_use` enforcement** — functions with `@must_use` attribute now
+  reject calls where the result is discarded as a statement.
+
+- **`@compute` requires `@workgroup_size`** — compute entry points without
+  `@workgroup_size` attribute now error at compile time.
+
+- **`const_assert` evaluation** — `const_assert false;` now produces a
+  compile error. Supports bool literals, negation, logical ops, integer
+  comparisons, and named constants. Complex expressions gracefully skipped.
+
+- **`@binding`/`@group` pairing** — resource variables with `@binding`
+  but no `@group` (or vice versa) now error.
+
+- **Zero-sized arrays rejected** — `array<T, 0>` now produces a compile
+  error per WGSL spec (array size must be positive).
+
+- **Invalid swizzle components** — GLSL-only `s/t/p/q` swizzle names
+  rejected. Mixed namespaces (`v.xg`, `v.rb`) rejected. Only `x/y/z/w`
+  and `r/g/b/a` accepted, each set must be used consistently.
+
+### Validation parity
+
+All 8 fixes verified against Rust naga — identical rejection behavior.
+
+## [0.17.6] - 2026-04-23
+
+### Fixed (DXIL)
+
+- **Single-store local promotion** — eliminates alloca/store/load chains
+  for vertex/fragment output staging, matching DXC's direct `storeOutput`.
+- **Sampler heap after input loads** — DXC emit ordering for fragment shaders.
+- **HLSL namer suffix** — trailing `_` on resource names ending with
+  digits or matching HLSL keywords.
+- **Input used mask sorted order** — correct extended properties metadata
+  for fragment shaders with multiple struct inputs.
+- **Fragment input signature ordering** — LOC semantics before SV_Position.
+- **Raw buffer i32 overload** — float loads via i32 + bitcast, matching
+  DXC ByteAddressBuffer convention.
+- **Strength reduction** — `urem x, 2^N` → `and x, (2^N-1)` at emit time.
+
+### Metrics
+
+- DXC golden diff=0: 82 → **94** (+12)
+- Line parity: 46.5% → **48.1%**
+
+## [0.17.5] - 2026-04-23
+
+### Added
+
+- **`ir.TypeSize()` — shared type size calculation** matching Rust naga
+  `TypeInner::try_size(gctx)`. Used by wgpu core for late buffer binding
+  size validation (VAL-006). 23 unit tests.
+
+- **`ir.StorageFormat.IsUnorm()` / `IsSnorm()`** — predicate methods for
+  storage texture format classification, used by DXIL backend for correct
+  component type metadata.
+
+### Fixed (DXIL)
+
+- **UNorm/SNorm component types** — `rgba8unorm` → `UNormF32` (14) in metadata.
+- **CBV metadata size** — actual struct size, not vec4-rounded.
+- **Named metadata ordering** — `!dx.resources` before `!dx.viewIdState`.
+- **dx.op attribute classification** — correct `nounwind readonly` attributes.
+
+### Changed
+
+- **DXC golden normalizer** — function declarations and attribute definitions
+  sorted alphabetically, eliminating false-positive ordering diffs.
+
+### Metrics
+
+- DXC golden diff=0: 72 → **82** (+10)
+- Line parity: 45.7% → **46.5%**
+
+### Notes
+
+- **DXIL validation gate terminology.** Prior releases reported "N/N DXC
+  validation" pass counts. The underlying command is `dxc.exe -dumpbin`,
+  which is a parser-printer (structural parse + human-readable dump), not
+  a full DXIL validator. It catches malformed bitcode (e.g. the "Invalid
+  record" class of bugs fixed in BUG-DXIL-004) but does NOT cross-check
+  ABI-level metadata against D3D12 runtime expectations (e.g. PSV0
+  `ShaderStage` byte against the pipeline slot). **Genuine validation via
+  `IDxcValidator::Validate()` — including a three-layer defensive wrapper
+  that prevents `dxil.dll` AV on any input — landed in 0.17.4 (see
+  `cmd/dxilval`, `internal/dxcvalidator`, and BUG-DXIL-VALIDATOR-REAL
+  entries below).** CHANGELOG/README/ROADMAP wording in past entries has
+  been left as-is for historical accuracy; new entries distinguish
+  "DXC parse" from "IDxcValidator real validation".
+
+## [0.17.4] - 2026-04-21
+
+### Added
+
+- **`cmd/dxilval` — Pure Go DXIL validation CLI backed by IDxcValidator**
+  (FEAT-DXIL-010 + BUG-DXIL-VALIDATOR-REAL, v0.17.4). First-ever Pure Go
+  integration with Microsoft's `IDxcValidator` (`dxil.dll`), zero CGO.
+  Three modes: `dxilval shader.dxil` validates a single container,
+  `dxilval --wgsl shader.wgsl` compiles through naga and validates each
+  entry point, `dxilval --corpus dir/` walks a directory and reports a
+  typed-error summary. Internal `internal/dxcvalidator` package wraps
+  `IDxcValidator` via `syscall` + a custom `IDxcBlob` implemented through
+  `syscall.NewCallback`, spawns a fresh OS thread via `kernel32!CreateThread`
+  (mandatory — `dxil.dll`'s thread-local allocator is set up in
+  `DLL_THREAD_ATTACH`, which Windows only fires for threads created AFTER
+  `LoadLibrary`), and falls back to Windows 10 SDK paths when `dxil.dll`
+  is not on `PATH`. The empirical "first-ever `VALID (S_OK)`" check on
+  the golden `tmp/min1_final.dxil` fixture is now a permanent unit test
+  (`TestSmokeValidateGoldenFixture`) instead of a one-off PoC.
+
+- **`internal/dxcvalidator` — three-layer defensive validation stack**
+  (BUG-DXIL-VALIDATOR-REAL, v0.17.4). Any blob handed to `dxil.dll`
+  passes through a staged defence that prevents the validator-AV classes
+  documented in Phase 0 research:
+
+  - **Layer 0 — emitter-side assertion.** `dxil/internal/emit/emitter.go`
+    now refuses to emit a container when the entry function is unset.
+    Without this guard, the BUG-DXIL-012 regression class would write
+    `!dx.entryPoints[0][0] = null`, which causes `IDxcValidator` to AV
+    at `dxil.dll+0xe9da` (NULL+0x18) in its entry-point walker. Any
+    future regression becomes an attributable Go error instead of a
+    silent process crash.
+  - **Layer 1 — `PreCheckContainer` structural check**
+    (FEAT-VALIDATOR-PRECHECK-001). `internal/dxcvalidator/precheck.go`
+    walks the DXBC container at fixed offsets and rejects truncated
+    blobs, bad magic, bad part counts, malformed part headers, missing
+    `DXIL` / `ILDB` / `PSV0` / `ISG1` / `OSG1` parts, invalid PSV0
+    stage bytes, and empty entry-function-name strings. Ten typed
+    sentinel errors (`errors.Is`-switchable), every branch exercised by
+    unit tests, runs before the `HeapAlloc` copy so rejection costs
+    nothing.
+  - **Layer 2 — `bitcheck.Check` bitcode metadata walker**
+    (FEAT-VALIDATOR-BITCHECK-001). `internal/dxcvalidator/bitcheck/` is
+    a minimal Pure Go LLVM 3.7 bitstream reader mirroring
+    `dxil/internal/bitcode/writer.go` one-to-one. It walks just far
+    enough to find the `!dx.entryPoints` named metadata and verify each
+    entry-point tuple has a non-null function reference in operand 0.
+    Skips non-metadata blocks via block-length fast-forward. Scoped
+    specifically to the BUG-DXIL-012 AV class — not a general-purpose
+    LLVM bitcode parser. ~2500 LOC including tests, five typed
+    sentinel errors, 72.3% line coverage, DXC abbreviation-decoding
+    implemented and exercised via hand-assembled fixtures. A minimal
+    real DXC integration fixture is deferred to
+    FEAT-VALIDATOR-BITCHECK-002.
+
+  The wrapper is also defensive against sporadic `dxil.dll` misbehaviour
+  observed during corpus walking — the validator occasionally returns
+  `S_OK` with a `NULL IDxcOperationResult` on some inputs
+  (`debug-symbol-large-source.wgsl`), which the wrapper now catches
+  and surfaces as a clean typed error instead of dereferencing NULL
+  through the COM vtable.
+
+- **DXIL: PSV0 signature element generalization for all binding kinds**
+  (BUG-DXIL-019 follow-up, v0.17.4). `buildGraphicsPSVSigs` /
+  `makePSVSignatureElement` now cover every graphics-stage I/O binding:
+  `LocationBinding` (inputs and non-fragment outputs → arbitrary
+  `TEXCOORD` with real location-based index; fragment color outputs →
+  `SV_Target` with location as semantic index) plus the full system-
+  value set (`BuiltinFrontFacing`, `BuiltinSampleIndex`,
+  `BuiltinSampleMask`, `BuiltinClipDistance`, `BuiltinPrimitiveIndex`,
+  `BuiltinViewIndex`). Interpolation mode mapping covers all DXIL
+  `InterpolationMode` enum values (Constant / Linear / LinearNoperspective
+  / Centroid / Sample variants). Per-side (input/output) start-row
+  tracking replaces the previous always-zero `StartRow`. Refactor into
+  `psvSemanticForBinding` / `psvSemanticForBuiltin` /
+  `psvSemanticForLocation` / `psvInterpolationMode` / `psvComponentType`
+  helpers for readability.
+
+- **DXIL: `Options.BindingMap`** — public API for remapping WGSL `@group`/`@binding`
+  to DXIL `(space, register)`, mirroring `hlsl.Options.BindingMap`. Required for wgpu
+  root signatures, which use monotonic per-class counters
+  (`SRV=t0,t1,…` / `UAV=u0,u1,…` / `CBV=b0,b1,…`). Without a map, behavior is
+  unchanged (raw WGSL numbers used as absolute DXIL registers — backward compatible).
+  New public types: `dxil.BindingLocation`, `dxil.BindTarget`, `dxil.BindingMap`.
+
+### Fixed
+
+- **DXIL: read-only storage buffers classified as SRV** — `var<storage, read>` now
+  lowers to SRV (t-register, `ByteAddressBuffer`), while `var<storage, read_write>`
+  stays UAV (u-register, `RWByteAddressBuffer`), matching the HLSL backend. Previously
+  all `SpaceStorage` globals became UAV, causing register collisions in pipelines
+  that mix read-only and read-write storage buffers (e.g. particle sim `pin`/`pout`).
+  Also fixes latent bug in `resourceKind` where SRV storage buffers fell through to
+  `Texture2D` metadata kind.
+
+- **DXIL: SRV storage compute path — binding arrays and struct vector loads**
+  (BUG-DXIL-004). Two fixes needed after the SRV classification change to unblock
+  real compute workloads:
+  - `resolveBindingArrayUAVChainFromGV` was still gated on `class == UAV`, so
+    `binding_array<T>` over `var<storage, read>` fell through to a generic scalar
+    load path (`binding-buffer-arrays` regressed 163/163 → 162/163). Relaxed to
+    `isStorageBufferClass`, matching the other nine `resolveUAV*` helpers.
+  - Pre-existing "Invalid record" in `@compute` + vector-field-of-local-struct
+    loads, exposed by particles sim: loading `p.vel` where `p` is a local
+    `Particle{pos: vec2, vel: vec2}` fell through to generic `emitLoad`, which
+    emitted a single scalar `load float` and never set `pendingComponents`.
+    Downstream `emitBinaryVectorized`/`getComponentID` grabbed the adjacent
+    `cbufferLoadLegacy` struct-typed result as an f32 operand, corrupting the
+    bitcode. Fixed by decomposing vector struct-field loads into N per-component
+    GEP + scalar load with proper `pendingComponents` tracking.
+  - Regression corpus: `compute-storage-read-rw.wgsl` (canonical SRV storage
+    compute) and `compute-storage-struct-read-rw.wgsl` (minimal particles
+    reproducer). `TestDxilValSummary`: **165/165 (100%)**, up from 163/163.
+
+- **DXIL: DCE pass (dead code elimination)** — mark-and-sweep pass removes dead
+  locals, dead control flow, dead pure function calls, and dead resources from
+  the IR before DXIL emission. Matches the `DxilLinker.cpp` optimization pipeline
+  used by DXC.
+
+- **DXIL: SROA pass (scalar replacement of aggregates)** — struct-typed local
+  variables are decomposed into per-member locals, enabling mem2reg promotion
+  of individual fields. Init-only locals emit their initializer directly and
+  skip alloca entirely.
+
+- **DXIL: mem2reg Phase B** — if/switch phi insertion with SSA construction for
+  promoted locals. Extends the existing Phase A (straight-line promotion) with
+  control-flow-aware phi placement.
+
+- **DXIL: inline pass improvements** — alias aggregate/opaque args (struct,
+  texture, sampler) instead of copying; two-tier inline policy (pure simple
+  helpers inlined automatically); early-return wrapping via loop+break pattern
+  for helpers with multiple returns; arg-spill StmtEmit coverage for mem2reg
+  promotion of spilled arguments.
+
+- **DXIL: PrefixStable register packing** — register allocation now matches the
+  DXC algorithm: sort by class priority (UAV > SRV > CBV > Sampler), then by
+  declaration order within each class, producing identical ISG1/OSG1/PSG1 row
+  assignments.
+
+- **DXIL: createHandle class priority ordering** — handle creation order now
+  follows DXC convention (UAV > SRV > CBV > Sampler), fixing validation
+  mismatches in shaders with mixed resource types.
+
+- **DXIL: barrier mode flags + noduplicate** — barrier intrinsics now emit
+  proper DXIL mode flags and carry the `noduplicate` function attribute,
+  matching DXC output exactly.
+
+- **DXIL: fast-math flags + operand canonicalization** — arithmetic instructions
+  carry fast-math flags matching DXC defaults; commutative binary ops follow
+  LLVM InstCombine canonicalization (constants to RHS); Reassociate pass for
+  commutative chains.
+
+- **DXIL: loadInput reverse ISG1 row order** — input loads now emit in reverse
+  ISG1 row order matching DXC, with component-level DCE eliminating unused
+  loads.
+
+- **DXIL: raw buffer i32 overload + bitcast** — float stores to raw buffers use
+  the `i32` `bufferStore` overload with bitcast, matching DXC behavior instead
+  of emitting a non-existent float overload.
+
+- **DXIL: post-DCE shader model version auto-upgrade** — after dead code
+  elimination, the emitter re-scans used intrinsics and upgrades the SM version
+  if remaining code requires a higher minimum (e.g. SM 6.0 → 6.2 for wave ops).
+
+- **DXIL: IR-based input signature Used mask** — ISG1 Used column now computed
+  from IR reachability analysis rather than always marking all inputs as used.
+
+- **DXIL: CBV typed struct members** — uniform buffer types now emit LLVM struct
+  members with proper types (`[4 x <4 x float>]` for mat4x4) instead of raw
+  byte arrays, matching DXC's `hostlayout.struct` convention.
+
+- **DXIL: HLSL-style type naming** — DXIL metadata and type names now use
+  HLSL-compatible naming (`class.Texture2D`, `hostlayout.struct.Uniforms`),
+  matching DXC for golden diff parity.
+
+- **DXIL: sampler heap SRV ordering + configurable bindings** — sampler heap
+  entries follow SRV class ordering; `Options` now supports configurable
+  sampler bindings for custom root signature layouts.
+
+- **DXIL: per-component ViewID taint propagation** — output signature ViewID
+  dependencies are tracked per-component through the dataflow graph, matching
+  DXC's PSV0 ViewID taint analysis.
+
+- **DXIL: dead resource elimination** — unreachable global resources (detected
+  via reachable globals analysis after inlining) are excluded from handle
+  creation and metadata tables.
+
+- **DXIL: input signature extended-properties null mask** — ISG1 extended
+  properties table uses null entries for inputs that carry no extra metadata,
+  matching DXC's sparse encoding.
+
+- **DXIL: TestDxilDxcGolden** — new SPIR-V-style golden parity test comparing
+  naga DXIL output against DXC reference across 182 shaders. Reports line-level
+  parity percentage and exact-match (diff=0) counts.
+
+- **DXIL: TestDxilValGGProduction** — regression guard validating all 57 gg
+  production entry points through IDxcValidator on every test run.
+
+### Metrics (DXIL hardening batch)
+
+- **IDxcValidator:** 152/170 → 161/170 (94.7%, +9 shaders)
+- **DXC golden diff=0:** 24 → 72 (+48 shaders exact match)
+- **DXC golden line parity:** 37.0% → 45.7% (+8.7pp)
+- **gg production:** 50/57 → 57/57 (100%, all entry points VALID)
+- **Visual:** black screen → circles + text rendering on D3D12 DXIL pipeline
+- **Text backends:** 100% unchanged (MSL/HLSL/GLSL/SPIR-V untouched)
+
+## [0.17.3] - 2026-04-11
+
+### Added
+
+- **DXIL: CBV (Constant Buffer) loads** — `dx.op.cbufferLoadLegacy` for `var<uniform>`.
+  Register index calculation (byteOffset/16), component extraction via `extractvalue`.
+  Supports f32/i32/f64/i64/f16 overloads, struct member access at arbitrary offsets.
+
+- **DXIL: Compute shader support (Phase 2)** — `@compute` entry points now compile to DXIL:
+  - Thread ID builtins: `dx.op.threadId`, `dx.op.groupId`, `dx.op.threadIdInGroup`,
+    `dx.op.flattenedThreadIdInGroup`
+  - `numthreads` metadata from `@workgroup_size(X,Y,Z)`
+  - UAV storage buffers: `dx.op.bufferLoad`/`dx.op.bufferStore` for `var<storage, read_write>`
+  - Atomic operations: `dx.op.atomicBinOp` (add, subtract, and, or, xor, min, max, exchange),
+    `dx.op.atomicCompareExchange`, atomic load/store
+  - Barriers: `dx.op.barrier` with storage/workgroup/subgroup flag mapping
+  - Reference: Mesa `nir_to_dxil.c`
+
+### Fixed
+
+- **DXIL: bitcode binary operation opcodes** — `BinOpKind` constants used LLVM IR enum
+  numbering (FAdd=1) instead of bitcode unified opcodes (Add/FAdd=0). DXC decoded our
+  FAdd as FSub. Fixed to match Mesa `dxil_module.h` encoding.
+
+- **DXIL: finalize() operand remapping** — `finalize()` remapped ALL instruction operands
+  as value IDs, corrupting type IDs, opcodes, alignment values, and basic block indices.
+  Added `valueOperandIndices()` that precisely identifies which operands are values per
+  instruction type.
+
+- **DXIL: alloca alignment encoding** — Was `log2(bytes)`, should be `log2(bytes)+1` per
+  LLVM 3.7 / Mesa `dxil_emit_alloca()`.
+
+- **DXIL: vector local variable scalarization** — Single alloca for `vec4<f32>` replaced
+  with per-component allocas. Store/Load now operate on correct components.
+
+- **DXIL: GEP struct access** — Added `getelementptr` (FUNC_CODE_INST_GEP=43) for struct
+  member access from local variable pointers. Nested struct access with flat offset
+  computation. Struct store decomposed into per-scalar-field GEP + store.
+
+- **DXIL: retail hash wired up** — `ComputeRetailHash()` (INF-0004 modified MD5) was
+  implemented but never called. Now used when `UseBypassHash=false`.
+
+- **DXIL: push constants as CBV** — `SpacePushConstant` and `SpaceImmediate` globals
+  classified as CBV resources with synthetic bindings.
+
+- **DXIL: resource metadata rewrite** — Per-class metadata matching Mesa exactly. CBV
+  fields[6] = buffer size (was resource kind), SRV/UAV 9-11 fields with element type tags,
+  fields[1] = undef pointer (was null). Fixes 23 DXC validator crashes.
+
+- **DXIL: struct return decomposition** — Multi-output shaders (struct returns with multiple
+  @location fields) now decompose into per-field GEP + scalar load + storeOutput.
+
+- **DXIL: binary op vector scalarization** — Vector binary operations decomposed into
+  per-component scalar ops with scalar-vector broadcast.
+
+- **DXIL: global variable allocas** — Non-resource globals (workgroup, private) get proper
+  alloca pointers instead of placeholder values.
+
+- **DXIL: array/matrix CBV loads, dynamic GEP, UAV constant-index fix** — Matrix
+  CBV loads (one cbufferLoadLegacy per column), array local variable allocas,
+  dynamic Access with GEP, UAV constant-index access fix. 3 more shaders pass DXC.
+
+- **DXIL: SRV/UAV direct loads, dynamic CBV index, array output decomposition** —
+  SRV/UAV loads routed to bufferLoad (not LLVM load), dynamic CBV index with stride
+  arithmetic, ZeroValue/Compose dynamic array access, array-typed builtin outputs.
+
+- **DXIL: typed undef for bufferStore, deep UAV chains, entry-block allocas** —
+  Float bufferStore uses typed undef (f32, was i32). Deep UAV pointer chains
+  (struct-wrapped arrays, nested Access). All allocas in entry block (was lazy).
+
+- **DXIL: mesh shader intrinsics (SM 6.5)** — SetMeshOutputCounts (168),
+  StoreVertexOutput (171), StorePrimitiveOutput (172), EmitIndices (169).
+  All 4 mesh shaders pass DXC (9 entry points). PSG1 primitive signatures.
+
+- **DXIL: struct-typed entry point arguments** — Fragment/vertex shaders with struct
+  inputs (e.g., `vertex: VertexOutput`) now correctly load per-member with row tracking.
+  Fixes 14 additional shaders.
+
+- **DXIL: helper function emission with per-function value ID isolation** — Each helper
+  function gets independent value ID space. `collectCalledFunctions()` pre-scans entry point.
+
+- **DXIL: switch statements** — Cascading `icmp eq` + conditional branches with merge block.
+
+- **DXIL: 17 pack/unpack math functions** — pack4x8snorm/unorm, unpack4x8snorm/unorm,
+  pack2x16float/snorm/unorm, unpack variants, pack4xI8/U8/clamp, unpack4xI8/U8.
+
+- **DXIL: matrix operations** — mat*vec, vec*mat, mat*mat, mat+/-mat, mat*scalar, transpose.
+  All scalarized to component-wise DXIL instructions (dot products for multiply).
+
+- **DXIL: workgroup atomics** — LLVM `atomicrmw`/`cmpxchg` for workgroup variables
+  (add, sub, and, or, xor, min, max, xchg, compare-exchange).
+
+- **DXIL: vector select scalarization, math broadcast, ExprArrayLength, helper vector returns,
+  struct member component stores, atomic compare-exchange result struct, abstract literals,
+  matrix alloca, refract/modf/frexp/quantizeF16** — systematic fixes across emitter.
+
+- **DXIL: atomic type width support (i32/i64/f32)** — workgroup atomics now use correct
+  type width instead of hardcoded i32. Fixes f32/i64 atomic shaders.
+
+- **DXIL: ExprOverride + ProcessOverrides** — pipeline override constants now compile.
+  DXIL test harness processes overrides (same as SPIR-V/HLSL).
+
+- **DXIL: matrix column extraction, f16 constant encoding** — AccessIndex on matrix
+  returns full column vector (was single scalar). F16 constants use IEEE 754 half-precision.
+
+- **DXIL: typed zero constants, CBV/UAV resource pass-through, struct field loads** —
+  f16/i64 zero constants use correct types. CBV resource AccessIndex pass-through.
+  UAV struct field byte offset + scalar type resolution. Multi-register struct loads.
+
+- **DXIL: FRem lowering** — LLVM FRem lowered to `a - b * floor(a/b)` (DXC rejects FRem).
+
+- **DXIL: texture intrinsics** — `dx.op.getDimensions` (72) for textureDimensions/numLevels/numSamples/numLayers,
+  `dx.op.textureLoad` (66) for imageLoad, `dx.op.textureStore` (67) for imageStore.
+
+- **DXIL: complex UAV access chains, array load/store decomposition, workgroup uniform load** —
+  Matrix column+component UAV access, multi-member struct arrays, 512-element array copy,
+  StmtWorkGroupUniformLoad as barrier+load+barrier pattern.
+
+- **DXIL: 8 texture sampling intrinsics** — OpSample(60), OpSampleBias(61),
+  OpSampleLevel(62), OpSampleGrad(63), OpSampleCmp(64), OpSampleCmpLevelZero(65),
+  OpTextureGather(73), OpTextureGatherCmp(74). Previously only OpSample.
+
+- **DXIL: binding array dynamic handles** — `dx.op.createHandle` with dynamic index
+  for `binding_array<T>` resources. Both ExprAccess and ExprAccessIndex paths.
+
+- **DXIL: NumWorkGroups via synthetic CBV** — `$Globals` CBV with cbufferLoadLegacy
+  for compute dispatch dimensions (DXIL has no intrinsic, matches DXC approach).
+
+- **DXIL: ray query intrinsics (SM 6.5)** — 35 new opcodes (178-212): allocateRayQuery,
+  traceRayInline, proceed, candidateType, committedStatus, all intersection getters.
+  RayIntersection struct (34 components). Auto SM upgrade to 6.5.
+
+- **DXIL: image atomics** — StmtImageAtomic via dx.op.atomicBinOp/atomicCompareExchange
+  with texture handles and spatial coordinates.
+
+- **DXIL: wave/subgroup operations (SM 6.0+)** — 13 wave intrinsics: waveGetLaneIndex(111),
+  waveGetLaneCount(112), waveAnyTrue(113), waveAllTrue(114), waveActiveBallot(116),
+  waveReadLaneAt(117), waveReadLaneFirst(118), waveActiveOp(119), waveActiveBit(120),
+  wavePrefixOp(121), quadReadLaneAt(122), quadOp(123).
+
+- **DXIL: DXC dumpbin validation** — **163/163 testable shaders pass DXC dumpbin (100%)**.
+  Zero val_fail. Zero compile_fail. 2 expected fail (no entry points).
+  ALL 6 backends at 100%. World's first Pure Go DXIL generator at full validation.
+
+### Fixed (other backends)
+
+- **SPIR-V: OpIMul for vec4\<f32\>*f32 after unpack4x8unorm (BUG-SPIRV-003)** —
+  `resolveMathType()` missing return types for 10 pack/unpack functions. `unpack4x8unorm(u32)`
+  returned `u32` instead of `vec4<f32>`, causing `OpIMul` instead of `OpVectorTimesScalar`.
+  Fixes gg#252, naga#61.
+
+### Changed
+
+- **SPIR-V Rust reference: allow-list for intentional divergences** — Unified allow-list
+  across all backends (SPIR-V/MSL/HLSL/GLSL) for shaders where our output intentionally
+  differs from Rust naga (Workgroup layout-free types per VUID-StandaloneSpirv-None-10684,
+  no-compact-pass for entry-point-less shaders). 0 fail across all backends.
+
+- **SPIR-V validation: 165/165** — Added `ptr-deref-test` shader (+1 from v0.17.2).
+
+## [0.17.2] - 2026-04-10
+
+### Fixed
+
+- **SPIR-V: OpFunctionCall type mismatch with Workgroup values (BUG-SPIRV-002)** — Regression
+  from v0.17.1 Workgroup fix. Values loaded from `Workgroup` variables had layout-free types
+  that propagated into `OpFunctionCall` arguments, causing type mismatch with decorated function
+  parameters. Fix: insert `OpCopyLogical` immediately after every `OpLoad` from Workgroup
+  (in `emitLoad`, `emitAccess`, `emitAccessIndex`), converting layout-free → decorated at the
+  load point. Guard `maybeCopyLogicalForStore` against double-conversion when value is already
+  decorated. Validated: 164/164 naga shaders + 23/23 gg GPU shaders pass spirv-val v2026.1.
+  (gogpu/wgpu#134, reported by @SideFx via gogpu/ui#67)
+
+## [0.17.1] - 2026-04-08
+
+### Fixed
+
+- **SPIR-V: Workgroup ArrayStride violation (VUID-StandaloneSpirv-None-10684)** — SPIR-V backend
+  emitted `ArrayStride` decoration on array types used in `Workgroup` storage class, which is
+  forbidden without `SPV_KHR_workgroup_memory_explicit_layout`. Intel Vulkan silently accepted this,
+  but Qualcomm Adreno correctly rejected it — causing invisible text on Snapdragon X Elite.
+  Fix: emit separate layout-free type declarations for Workgroup variables (arrays without
+  `ArrayStride`, structs without `Offset`/`MatrixStride`). Uses `OpCopyLogical` (SPIR-V 1.4+)
+  to bridge Workgroup ↔ Storage type mismatches. Constant deduplication added to prevent
+  duplicate `OpConstant` IDs that break `OpCopyLogical` type equivalence.
+  Rust naga has the same bug ([gfx-rs/wgpu#7696](https://github.com/gfx-rs/wgpu/issues/7696),
+  fix PR [#9295](https://github.com/gfx-rs/wgpu/pull/9295) still open).
+  (gogpu/wgpu#134, reported by @SideFx via gogpu/ui#67)
+
+## [0.17.0] - 2026-04-06
+
+### Added
+
+- **DXIL backend (experimental)** — First Pure Go DXIL generator. Direct DXIL
+  generation from naga IR for DX12 Shader Model 6.0. Eliminates FXC/DXC compiler
+  dependency entirely. Zero CGO, zero external dependencies.
+  **Verified: 2400+ frames at 60 FPS on D3D12 (Intel Iris Xe).**
+  Rust naga has not implemented this (open issue since 2020).
+  190 tests, ~12.5K LOC. Public API: `dxil.Compile()`, `dxil.DefaultOptions()`.
+  - LLVM 3.7 bitcode writer with VBR encoding, nested blocks, abbreviation records
+  - DXBC container with DXIL, ISG1, OSG1, PSV0, SFI0, HASH parts
+  - BYPASS hash (Agility SDK 1.615+, January 2025) — no dxil.dll signing needed
+  - Full expression lowering: literals, binary/unary ops, compose, access, splat,
+    select, load/store, swizzle, derivatives, relational, type casts (10 LLVM
+    cast opcodes), math intrinsics (30+ functions including min/max/clamp/dot/
+    cross/mix/fma/smoothstep/pow/length/distance/normalize)
+  - Control flow: LLVM basic blocks with br/br_cond, loops with back edges,
+    break/continue via loop context stack, BreakIf support
+  - Local variables: alloca + load + store with proper bitcode serialization
+  - Resource bindings: dx.op.createHandle(57) for CBV/SRV/Sampler,
+    dx.op.sample(60) for texture sampling, dx.resources metadata
+  - I/O signatures: ISG1/OSG1 with semantic mapping (SV_Position, TEXCOORD,
+    SV_Target, SV_VertexID, SV_InstanceID, SV_IsFrontFace, SV_Depth)
+  - Pipeline state validation: PSV0 with runtime info, shader stage, wave lanes
+  - Vector scalarization: DXIL has no native vectors — vec4 = 4 separate values,
+    per-component tracking via exprComponents map
+  - dx.op intrinsic system: overload-typed function declarations, lazy caching
+  - Value ID remapping: emitter local IDs → serializer global numbering via finalize()
+  - Error hardening: unsupported features return errors (not silent skip)
+
+## [0.16.6] - 2026-04-05
+
+### Performance
+
+- **TypeRegistry zero-alloc lookups** — Refactored `normalizeType()` to `appendTypeKey()`
+  using `keyBuf []byte` with inline `string(keyBuf)` map index (Go compiler optimization).
+  Eliminates heap string allocation per type lookup. large_pbr: -59 allocs/op.
+- **Lexer token preallocation** — Token slice estimate `len(source)/4` (was `/6`).
+  Prevents slice regrowth for typical shaders.
+- **SPIR-V Backend reuse** — `Backend.Reset()` + `ModuleBuilder.Reset()` clear
+  all state without deallocating (Go 1.21+ `clear()` keeps map capacity).
+  `Compile()` calls `Reset()` internally. Small shaders: 4.9× fewer allocs
+  (68→14), 14× fewer bytes (17KB→1.2KB). Reuse benchmarks included.
+- **Lowerer/Parser pre-sizing** — Expression, statement, declaration slices
+  pre-allocated based on AST size estimates. TypeRegistry capacity hints.
+- **Overall: 594 → 562 allocs/op (-5.4%). SPIR-V reuse: 68 → 14 allocs (4.9×).**
+
+## [0.16.5] - 2026-04-05
+
+### Changed
+
+- **Dead code removal** — Removed 3 unused functions found by full codebase audit
+  (398 symbols scanned across 6 packages): `flattenBinding` (glsl), 
+  `concretizeTypeInner` (ir/compact), `resolveLiteralTypeInner` (ir/process_overrides).
+
+## [0.16.4] - 2026-04-04
+
+### Fixed
+
+- **GLSL: per-element loop for workgroup array zero-init** — Same fix as HLSL:
+  arrays >= 256 elements use `for` loop instead of inline constructor list
+  (`Type[256](elem, elem, ... ×256)` = 12KB single line). Prevents GL driver
+  compiler slowdown and potential crashes on mobile/embedded GL drivers.
+
+## [0.16.3] - 2026-04-04
+
+### Fixed
+
+- **Per-element loop for workgroup array zero-init** — FXC hangs 22 seconds on
+  `(StructType[256])0` bulk assign. Replaced with per-element `for` loop:
+  `for (uint _naga_zi_0 = 0u; ...) { arr[_naga_zi_0] = (ElementType)0; }`.
+  Compilation time: 22s → 68ms. Handles nested arrays recursively.
+  First implementation in the industry to fix this — Rust naga, ANGLE, Dawn
+  all have the same bug or workaround it differently.
+  See `docs/dev/research/HLSL-ZERO-INIT-FXC-HANG-RESEARCH.md`.
+- **Defaults changed to match Rust** — `ForceLoopBounding: true`,
+  `RestrictIndexing: true` (were both `false`).
+
+#### HLSL backend: parity fixes
+
+- **Dot4I8Packed/Dot4U8Packed** — dot4add intrinsics (SM 6.4+) with polyfill. (3 shaders)
+- **Pack4xI8/U8/Clamp + Unpack4xI8/U8** — shift+mask polyfills. (2 shaders)
+- **LiteralF16** — float16_t with h suffix. (2 shaders)
+- **ValuePointerType** — storage access stride computation. (1 shader)
+- **StmtImageAtomic** — InterlockedXxx on RWTexture coordinates. (2 shaders)
+- **ExprWorkGroupUniformLoadResult** — barrier + typed load + barrier. (1 shader)
+- **ExprBinary in global scope** — const binary expressions. (1 shader)
+- **Float exponent formatting** — removed spurious '+' in exponents. (1 shader)
+- **naga_extractBits/naga_insertBits** — per-type overloads matching Rust. (1 shader)
+- **Pack/Unpack 2x16/4x8 snorm/unorm/float** — all 10 inline polyfills. (1 shader)
+- **f16 infrastructure** — NagaConstants struct, matrix padding, storage Store patterns. (1 shader)
+- **Demand-driven StorageLoadHelpers** — match Rust approach. (1 shader)
+
+## [0.16.1] - 2026-04-04
+
+### Fixed
+
+#### SPIR-V binary validation: 29 → 0 failures, 16 → 0 compile failures (164/164 pass)
+
+All fixes validated against Rust naga reference (`naga/src/back/spv/`).
+SPIR-V TestRustReference: 4/87 → 90/93 (3 minor structural gaps, not bugs).
+
+- **Depth texture sampling** — Dref sampling uses scalar f32 result type;
+  non-Dref depth sampling uses vec4 then CompositeExtract for first component.
+  Matches Rust naga image.rs:823-837. (4 shaders)
+
+- **Function pointer arguments** — `isPointerExpression` now recognizes
+  pointer-typed FunctionArgument params. `emitCall` uses `emitPointerExpression`
+  for pointer parameters. (1 shader: access)
+
+- **Integer dot product** — OpDot only works on float vectors. Integer dot
+  products now use manual expansion (CompositeExtract + IMul + IAdd).
+  Matches Rust naga write_dot_product. (1 shader)
+
+- **FMix scalar-to-vector splatting** — When FMix selector is scalar but
+  operands are vectors, splat scalar via OpCompositeConstruct.
+  Matches Rust naga Mix handling. (2 shaders)
+
+- **Integer vec×scalar multiply** — OpIMul requires matching types. Scalar
+  operand splatted to vector via OpCompositeConstruct before IMul.
+  Matches Rust naga write_vector_scalar_mult. (1 shader)
+
+- **Matrix add/sub decomposition** — SPIR-V FAdd/FSub don't work on matrix
+  types. Decomposed into column-wise vector operations.
+  Matches Rust naga write_matrix_matrix_column_op. (1 shader)
+
+- **VectorTimesMatrix result type** — Result vector size must equal matrix
+  column count, not left vector size. Also fixed MatrixTimesMatrix for
+  non-square matrices. (1 shader)
+
+- **ImageQuerySize dimensionality** — Result type now matches image
+  dimensionality (2D→vec2, 3D→vec3, etc.) instead of always vec3.
+  ImageQueryNumLayers uses OpImageQuerySizeLod + CompositeExtract.
+  Matches Rust naga image.rs:1142-1210. (1 shader)
+
+- **Bitcast width conversion** — Width-changing integer casts now use
+  OpUConvert/OpSConvert instead of OpBitcast (which requires equal bit width).
+  Matches Rust naga block.rs:2061-2066. (1 shader + 5 bonus)
+
+- **Atomic int64 result types** — Atomic operations on int64 now use correct
+  64-bit scalar result type instead of hardcoded 32-bit. (2 shaders)
+
+- **AtomicCompareExchange struct** — OpAtomicCompareExchange returns scalar,
+  not struct. Now constructs `{old_value, exchanged}` struct via
+  OpCompositeConstruct with OpIEqual for the exchanged bool.
+  Matches Rust naga block.rs:3414+. (2 shaders + 1 bonus)
+
+- **ControlBarrier SubgroupMemory** — Fixed MemorySemanticsSubgroupMemory
+  constant (0x80, not 0x200). Barrier emission now matches Rust naga
+  write_control_barrier. (1 shader)
+
+- **ConstOffset image operand** — Changed from ConstOffsets (0x40, Gather-only)
+  to ConstOffset (0x08, valid for all sampling). (partial fix)
+
+- **Image store coordinates** — Integer coordinates now use proper bitcast
+  instead of float conversion. (2 shaders)
+
+- **External texture handling** — ImageClassExternal uses float sampled type
+  and OpImageQuerySizeLod for queries. (1 shader)
+
+- **ImageGatherExtended capability** — Removed spurious emission for
+  ConstOffset operands. Only needed for dynamic Offset. (1 shader)
+
+- **spirv-val target env** — Uses spv1.6 for general SPIR-V correctness
+  validation, with --uniform-buffer-standard-layout for std430 matrix stride.
+
+- **Pointer function arguments** — Copy-in/copy-out (spill) pattern for passing
+  OpAccessChain results to OpFunctionCall. SPIR-V requires memory object declarations
+  (OpVariable/OpFunctionParameter) as pointer arguments. (3 shaders)
+
+- **Image Lod float conversion** — SPIR-V ExplicitLod requires float Lod operand.
+  Integer level converted via OpConvertSToF/OpConvertUToF. (2 shaders)
+
+- **Binding arrays RuntimeArray** — Proper wrapping in Block-decorated struct. (1 shader)
+
+- **Mesh shaders** — MeshEXT/TaskEXT execution models, SPV_EXT_mesh_shader
+  extension, OutputVertices/OutputPrimitivesEXT execution modes. (4 shaders)
+
+- **Pipeline overrides (OpSpecConstant)** — ExprOverride expressions emitted as
+  OpSpecConstant/OpSpecConstantComposite with SpecId decoration. (3 shaders)
+
+- **Image atomics (OpImageTexelPointer)** — StmtImageAtomic emits
+  OpImageTexelPointer then standard atomic ops on the texel pointer. (2 shaders)
+
+- **WorkGroupUniformLoad** — Emitted as ControlBarrier + OpLoad + ControlBarrier
+  matching Rust naga's pattern. (1 shader)
+
+- **Pack4xI8/U8/Clamp + Unpack4xI8/U8** — Shift+mask pack/unpack polyfills
+  for 4×8-bit integer packing. (5 shaders)
+
+- **ProcessOverrides remap fixes** — StmtAtomic.Compare and StmtRayQuery
+  fields now correctly remapped during override processing. (2 shaders)
+
+### Known Issues
+
+- **0 SPIR-V binary validation failures.** All 164 shaders compile and pass spirv-val.
+
+- **3 SPIR-V structural differences** from Rust reference (Int8 capability,
+  decoration counts) — not validation or compilation issues.
+
+## [0.16.0] - 2026-04-02
+
+### Added
+
+- **GLSL: TextureMappings in TranslationInfo** — Reports texture-sampler
+  binding pairs for combined sampler2D, enabling GLES HAL SamplerBindMap
+  construction. Matches Rust naga ReflectionInfo pattern.
+
+### Fixed
+
+#### SPIR-V binary validation: 63 → 29 failures (−34 fixed)
+
+All fixes validated against Rust naga reference (`naga/src/back/spv/`).
+
+- **SPV_KHR_storage_buffer_storage_class extension** — StorageBuffer storage
+  class requires this extension for SPIR-V < 1.3 (default version is 1.1).
+  Matches Rust naga writer.rs:2580. (5 shaders)
+
+- **Workgroup ArrayStride decoration** — Workgroup variables must not have
+  explicit layout decorations per VUID-StandaloneSpirv-None-10684. Added
+  layout-free type emission for Workgroup address space. (1 shader)
+
+- **OpLoad on runtime-sized arrays** — SPIR-V forbids loading entire
+  runtime-sized arrays. Global variables containing runtime arrays now return
+  pointers instead of loaded values. (2 shaders)
+
+- **OpImageFetch result type** — Hardcoded vec4<f32> replaced with correct
+  type derived from image SampledKind. (1 shader)
+
+- **SPV_KHR_multiview, SPV_KHR_fragment_shader_barycentric,
+  SPV_KHR_integer_dot_product extensions** — Added when corresponding
+  capabilities are used. (6 shaders)
+
+- **CapabilityImageGatherExtended** — Added for textureGather with offset. (2 shaders)
+
+- **SampleMask BuiltIn** — Wrapped in array<u32,1> per SPIR-V spec. (1 shader)
+
+- **SPIR-V version 1.3 requirement** — RequireVersion(1.3) for subgroup/
+  GroupNonUniform capabilities. (1 shader)
+
+- **Duplicate OpTypeSampler** — Cached to emit exactly once. (3 shaders)
+
+- **ClipDistance/PrimitiveIndex builtins** — Added to builtinToSPIRV mapping. (1 shader)
+
+- **OpAtomicFAddEXT (6035)** — Float32 atomics use OpAtomicFAddEXT instead
+  of OpAtomicIAdd. Atomic scalar resolution returns kind+width for int64. (4 shaders)
+
+- **AtomicCompareExchange unequal semantics** — Unequal operand uses Acquire
+  (not AcquireRelease) per VUID-StandaloneSpirv-UnequalMemorySemantics-10875. (3 shaders)
+
+- **ExecutionModeDepthReplacing** — Fragment shaders writing FragDepth now
+  emit DepthReplacing per VUID-FragDepth-FragDepth-04216. (2 shaders)
+
+- **SPV_KHR_integer_dot_product version comparison** — Fixed 0x10006 → 0x10600
+  (SPIR-V version encoding is major<<16|minor<<8). (2 shaders)
+
+#### GLSL
+
+- **Depth texture combined sampler naming** — When a depth texture is used with
+  both regular and comparison samplers, the combined sampler names were swapped
+  due to non-deterministic Go map iteration. Fixed with deterministic sorting. (1 shader)
+
+### Known Issues
+
+- **29 SPIR-V binary validation failures** at release time. Fixed in [Unreleased]
+  section above (29 → 6 remaining).
+
+## [0.15.2] - 2026-04-01
+
+### Fixed
+
+- **HLSL: revert direct sampler kostyl, restore heap pattern** — Reverted the
+  direct sampler register binding from v0.15.1. DX12 HAL now implements proper
+  sampler heap.
+
+## [0.15.1] - 2026-03-31
+
+### Fixed
+
+- **HLSL: revert direct sampler register binding mode** — Samplers always use the
+  sampler heap indirection pattern (`nagaSamplerHeap[indexBuffer[N]]`), matching
+  Rust wgpu-hal architecture. The DX12 HAL now properly implements the global
+  sampler heap with per-bind-group sampler index buffers and provides
+  `SamplerBufferBindingMap` to naga during shader compilation.
+
+## [0.15.0] - 2026-03-30
+
+### Highlights
+
+- **ALL 5 backends at 100% Rust naga parity** — complete exact output match
+- **IR Reference: 144/144 (100%)** — complete structural match with Rust naga on ALL shaders
+- **SPIR-V Backend: 87/87 (100%)** — exact output match with Rust naga (was 40/87)
+- **MSL Backend: 91/91 (100%)** — exact output match with Rust naga
+- **GLSL Backend: 68/68 (100%)** — exact output match with Rust naga
+- **HLSL Backend: 58/58 (100%)** — exact output match with Rust naga
+- **ir/ test coverage: 82%** — up from 24%, with 148 new unit tests
+- **994 golden output files** across 4 backends, 164 test shaders
+- **Quake 1** renders on gogpu/wgpu Pure Go Vulkan backend (gogpu#157)
+
+### Added
+
+#### IR Level
+- **needsPreEmit auto-interrupt** — `addExpression` automatically interrupts emitter for
+  Literal, Constant, ZeroValue, GlobalVariable, FunctionArgument, LocalVariable, Override
+  expressions, matching Rust naga's `constant_evaluator::append_expr`
+- **Splat in GlobalExpressions** — single-arg vector constructors produce `ExprSplat` GE
+- **ZeroValue in GlobalExpressions** — zero-arg constructors produce `ExprZeroValue` GE
+- **Swizzle const-fold** — `vec4(vec2(1,2), vec2(3,4)).wzyx` fully evaluated at compile time
+- **dot4I8Packed/dot4U8Packed const-fold** — packed dot product evaluated at compile time
+- **Abstract composite constant inline** — `ABSTRACT_ARRAY[i]` inlines array literals
+- **Binary const eval → GE** — `vec2(1.0f) + vec2(3.0f, 4.0f)` produces GlobalExpressions directly
+- **Constant alias GE sharing** — `const ALIAS = ORIGINAL` reuses GE handle
+- **Void call emitter restart** — proper emitter state after void function calls
+- **Matrix column grouping** in nested constructor GlobalExpressions
+- **As conversion for scalar type mismatch** — `vec4f(u32_value)` inserts `ExprAs` convert
+
+#### SPIR-V Backend
+- **87/87 (100%) Rust naga parity** — exact binary output match on all reference shaders
+- **Integer div/mod safety wrappers** — `naga_div`/`naga_mod` helper functions prevent
+  division by zero and i32 MIN/-1 overflow, matching Rust naga behavior
+- **Image bounds checking** — Restrict and ReadZeroSkipWrite policies with coordinate
+  clamping for texture load/store operations
+- **Ray query helper functions** — 6 helper functions per ray query (initialize, proceed,
+  terminate, committed/candidate intersection getters)
+- **Force loop bounding** — iteration counter prevents infinite loops on malformed shaders
+- **Workgroup zero-init polyfill** — zero-initializes workgroup memory at entry point start
+- **20+ new capabilities** — ClipDistance, Geometry, GroupNonUniform, Float16 storage,
+  AtomicFloat32AddEXT, StorageImageExtendedFormats, SampleMaskPostDepthCoverage,
+  SubgroupBallotKHR, and more
+- **NonWritable/Flat/NonUniform decorations** — correct propagation for binding arrays
+  and storage buffer access
+- **OpLoad dereferencePointerType fix** — correct type resolution for pointer loads
+- **Float16 constant emission** — proper OpConstant for f16 values
+- **ModfStruct/FrexpStruct fix** — correct result struct types for decomposition functions
+- **Saturate FClamp fix** — `saturate()` emits FClamp with 0.0/1.0 bounds
+- **f16 I/O polyfill** — bitcast-based conversion for f16 entry point interface variables
+- **Composite spilling** — by-value dynamic indexing spills composites to local variables
+- **SSA entry point struct args** — correct argument handling for entry point structs
+- **Capability-aware dot4 polyfill** — software emulation when DotProduct unavailable
+- **Entry point interface vars** — SPIR-V 1.4+ globals, ForcePointSize decoration
+
+#### GLSL Backend
+- **68/68 (100%) Rust naga parity** — exact text output match on all reference shaders
+- **`dominates_global_use` reachability** — correct global variable emission per entry point
+- **ProcessOverrides** — pipeline constant specialization for GLSL output
+- **Image bounds checking** — coordinate clamping for texture operations
+
+#### MSL Backend
+- **Vertex Pulling Transform** — complete implementation in `msl/vertex_pulling.go`:
+  `_mslBufferSizes` struct, 42 vertex format unpacking functions, buffer type structs,
+  bounds-checked byte unpacking from raw vertex buffers
+- **External Texture Support** — `NagaExternalTextureWrapper` struct, multi-plane YUV
+  sampling (`nagaTextureSampleBaseClampToEdge`), texture load (`nagaTextureLoadExternal`),
+  dimensions query (`nagaTextureDimensionsExternal`), transfer function color space conversion
+- **TOML inline table parsing** — `msl_pipeline = { key = val }` format support
+
+#### WGSL Frontend
+- **Ray query support** — `acceleration_structure`, `ray_query` types, `RayDesc`/
+  `RayIntersection` predeclared structs, `RAY_FLAG_*` constants, 7 ray query
+  builtins. Full SPIR-V + HLSL + MSL backend emission.
+- **Subgroup operations** — `subgroupBallot`, `subgroupAdd/Mul/Min/Max/And/Or/Xor`,
+  `subgroupBroadcast/First`, `subgroupShuffle*`, `quadSwap*`, `subgroupBarrier`.
+  Full SPIR-V backend with correct capabilities. HLSL/MSL/GLSL placeholders.
+- **Vector const-exprs** — component-wise binary operations at module scope
+  (`const X = vec2(1.0) + vec2(3.0, 4.0)`). Splat expansion for scalar→vector.
+- **Override declarations** — `@id(N) override name: type = default;`
+- **f16/i64/u64/f64 scalar types** — `enable f16/int64;` directives, literal
+  suffixes (`1.0h`, `42li`, `42lu`, `1.0lf`), type constructors
+- **`break if` syntax** — continuing block `break if condition;`
+- **Type aliases** — `alias FVec3 = vec3<f32>;` with constructor support
+- **`const_assert` declarations** — compile-time assertions (evaluated as no-op)
+- **`workgroupUniformLoad` builtin** — maps to `ir.StmtWorkGroupUniformLoad`
+- **`atomicCompareExchange` result struct** — `.old_value`/`.exchanged` member access
+- **Template list edge cases** — trailing commas, `>=` disambiguation
+- **`diagnostic` directive** — top-level `diagnostic(...)` skipping
+- **164 WGSL test shaders** — 144/144 Rust reference (100%) + 20 custom
+
+### Changed
+
+#### SPIR-V Backend
+- **Block Ownership Model (NAGA-ARCH-001)** — refactored function emission
+  from flat instruction list to block-based architecture matching Rust naga.
+  Each SPIR-V basic block is now a first-class `Block` struct consumed by
+  `FunctionBuilder`. `LoopContext` passed by value for isolated nested loop
+  contexts. Eliminates `loopStack`/`breakStack` mutable state and
+  `blockEndsWithTerminator()` post-hoc checks. Produces identical SPIR-V
+  output — zero behavioral changes.
+
+### Performance
+
+#### GLSL Backend
+- **Dead code elimination via entry-point reachability (GLSL-001)** — GLSL
+  writer now walks the call graph from the target entry point and only emits
+  reachable types, constants, globals, and functions. SDF fragment shader
+  output reduced from 639KB to target <50KB. Fixes 5-10 second startup
+  delay on GLES backend ([naga#42](https://github.com/gogpu/naga/issues/42)).
+
+### Fixed
+
+#### SPIR-V Backend
+- **Workgroup Offset decoration removed (SPIRV-001)** — `emitTypeNoLayout()`
+  now handles struct types by creating separate type IDs without Offset,
+  ColMajor, or MatrixStride member decorations. Fixes Vulkan validation error
+  `VUID-StandaloneSpirv-None-10684` on all Vello compute shaders. Matches
+  Rust naga `global_needs_wrapper()` pattern.
+
+#### MSL Backend
+- **Workgroup variables emitted as entry point parameters (MSL-002)** —
+  `var<workgroup>` globals now appear as `threadgroup T& name` parameters
+  in compute entry points. Previously skipped because they have no resource
+  binding. Fixes `undeclared identifier 'sh_scratch'` on macOS Metal.
+- **Barrier calls fully namespace-qualified** — `threadgroup_barrier()` and
+  `mem_flags` now prefixed with `metal::`. Fixes `undeclared identifier
+  'mem_flags'` on strict Metal compilers.
+- **Runtime-sized array typedef** — dynamic arrays (`array<T>`) now emit
+  `typedef T name[1];` in MSL output. Fixes `unknown type name 'type_6'`
+  for storage buffer parameters.
+
+## [0.14.8] - 2026-03-16
+
+### Fixed
+
+#### GLSL Backend
+- **Bind group collision in GLSL output** — `@group(0) @binding(0)` and
+  `@group(1) @binding(0)` both generated `layout(binding = 0)`, causing
+  uniform shadowing on GLES. SDF viewport uniform was overwritten by clip
+  uniform, making all SDF shapes invisible. Now flattens to unique GL
+  binding points: `group * 16 + binding + base`.
+
+## [0.14.7] - 2026-03-15
+
+### Fixed
+
+#### MSL Backend
+- **Multi-group binding index collision** — `@group(0) @binding(0)` and `@group(1) @binding(0)` both mapped to Metal `[[buffer(0)]]`, causing shader compilation failure on macOS. The MSL backend now assigns sequential per-type indices (buffer, texture, sampler) across all bind groups sorted by `(group, binding)`, matching the Rust wgpu-hal approach. When `PerEntryPointMap` provides explicit mappings, those take priority. ([gogpu/gg#209](https://github.com/gogpu/gg/issues/209))
+
+## [0.14.6] - 2026-03-06
+
+### Fixed
+
+#### MSL Backend
+- **Pass-through globals for helper functions** — textures, samplers, uniforms, and storage buffers used by non-entry-point functions are now passed as extra parameters and arguments; previously MSL helper functions could not access entry point resource bindings, causing `undeclared identifier` errors (e.g., `msdf_atlas`, `msdf_sampler`, `sh_scratch`) for any shader with helper functions referencing global resources ([gogpu/ui#23](https://github.com/gogpu/ui/issues/23))
+
+## [0.14.5] - 2026-03-04
+
+### Fixed
+
+#### MSL Backend
+- **Buffer parameters use references (`&`) instead of pointers (`*`)** — buffer parameters now generate `constant Uniforms& u [[buffer(0)]]` (reference) instead of `constant Uniforms* u [[buffer(0)]]` (pointer); pointer syntax required `->` or `(*u).` for member access while the expression writer generates `.` access, causing Metal compilation errors on Apple Silicon ([gogpu/ui#23](https://github.com/gogpu/ui/issues/23))
+
+## [0.14.4] - 2026-03-01
+
+### Fixed
+
+#### MSL Backend
+- **Vertex `[[stage_in]]` for struct-typed arguments** — vertex shaders with struct-typed inputs (e.g., `fn vs_main(in: VertexInput)`) now correctly generate a synthesized `_Input` struct with `[[attribute(N)]]` members and `[[stage_in]]` parameter; previously only fragment stage was handled, causing undefined `in_` reference ([gogpu/ui#23](https://github.com/gogpu/ui/issues/23))
+- **`metal::discard_fragment()` namespace** — `discard_fragment()` now emits with required `metal::` namespace prefix; bare call was rejected by Metal shader compiler
+
+## [0.14.3] - 2026-02-25
+
+### Fixed
+
+#### SPIR-V Backend
+- **Deferred store for multiple call results** — Variables initialized from expressions containing multiple function call results now correctly emit deferred `OpStore` instructions for each intermediate result
+- **Deferred store for `var x = atomicOp()`** — Atomic operation results used in variable initialization now correctly generate deferred stores instead of losing the value (NAGA-SPV-006)
+- **`OpLogicalEqual` for bool comparisons** — Boolean equality expressions now emit correct `OpLogicalEqual` opcode; transitive deferred stores propagate through boolean comparison chains
+- **Atomic result type for `atomic<i32>` struct fields** — Atomic operations on signed integer struct members now use correct `OpTypeInt 32 1` result type instead of unsigned
+- **Prologue var init splitting** — Variable initializations that reference other local variables are now split from the function prologue into `StmtStore` at the declaration point, preventing use-before-definition in SPIR-V (NAGA-SPV-007)
+
 ## [0.14.2] - 2026-02-22
 
 ### Added
@@ -840,7 +1982,16 @@ First stable release. Complete WGSL to SPIR-V compilation pipeline (~10K LOC).
 
 ---
 
-[Unreleased]: https://github.com/gogpu/naga/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/gogpu/naga/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/gogpu/naga/compare/v0.14.8...v0.15.0
+[0.14.8]: https://github.com/gogpu/naga/compare/v0.14.7...v0.14.8
+[0.14.7]: https://github.com/gogpu/naga/compare/v0.14.6...v0.14.7
+[0.14.6]: https://github.com/gogpu/naga/compare/v0.14.5...v0.14.6
+[0.14.5]: https://github.com/gogpu/naga/compare/v0.14.4...v0.14.5
+[0.14.4]: https://github.com/gogpu/naga/compare/v0.14.3...v0.14.4
+[0.14.3]: https://github.com/gogpu/naga/compare/v0.14.2...v0.14.3
+[0.14.2]: https://github.com/gogpu/naga/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/gogpu/naga/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/gogpu/naga/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/gogpu/naga/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/gogpu/naga/compare/v0.12.1...v0.13.0

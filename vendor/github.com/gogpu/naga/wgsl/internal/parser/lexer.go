@@ -1,4 +1,4 @@
-package wgsl
+package parser
 
 import (
 	"unicode"
@@ -17,8 +17,10 @@ type Lexer struct {
 
 // NewLexer creates a new lexer for the given source.
 func NewLexer(source string) *Lexer {
-	// Estimate ~1 token per 6 characters of source.
-	estTokens := len(source) / 6
+	// Estimate ~1 token per 4 characters of source.
+	// WGSL averages ~4 chars/token (operators, keywords, punctuation).
+	// Slight overallocation is cheap — it's one slice, and avoids regrowth.
+	estTokens := len(source) / 4
 	if estTokens < 16 {
 		estTokens = 16
 	}
@@ -233,8 +235,11 @@ func (l *Lexer) number() {
 			for isHexDigit(l.peek()) {
 				l.advance()
 			}
-			// Integer suffixes (u for unsigned, i for signed)
-			if l.peek() == 'i' || l.peek() == 'u' {
+			// Integer suffixes: i, u (32-bit), li, lu (64-bit)
+			if l.peek() == 'l' && (l.peekNext() == 'i' || l.peekNext() == 'u') {
+				l.advance() // consume 'l'
+				l.advance() // consume 'i' or 'u'
+			} else if l.peek() == 'i' || l.peek() == 'u' {
 				l.advance()
 			}
 			l.addToken(TokenIntLiteral)
@@ -266,8 +271,11 @@ func (l *Lexer) number() {
 				l.advance()
 			}
 		}
-		// Float suffix
-		if l.peek() == 'f' || l.peek() == 'h' {
+		// Float suffix: f, h (32/16-bit), lf (64-bit)
+		if l.peek() == 'l' && l.peekNext() == 'f' {
+			l.advance() // consume 'l'
+			l.advance() // consume 'f'
+		} else if l.peek() == 'f' || l.peek() == 'h' {
 			l.advance()
 		}
 		l.addToken(TokenFloatLiteral)
@@ -283,19 +291,35 @@ func (l *Lexer) number() {
 		for isDigit(l.peek()) {
 			l.advance()
 		}
+		// Float suffix after exponent: f, h (32/16-bit), lf (64-bit)
+		if l.peek() == 'l' && l.peekNext() == 'f' {
+			l.advance()
+			l.advance()
+		} else if l.peek() == 'f' || l.peek() == 'h' {
+			l.advance()
+		}
 		l.addToken(TokenFloatLiteral)
 		return
 	}
 
-	// Float suffix without decimal point: 1f, 1h are valid WGSL float literals
+	// Float suffix without decimal point: 1f, 1h (32/16-bit), 1lf (64-bit)
+	if l.peek() == 'l' && l.peekNext() == 'f' {
+		l.advance() // consume 'l'
+		l.advance() // consume 'f'
+		l.addToken(TokenFloatLiteral)
+		return
+	}
 	if l.peek() == 'f' || l.peek() == 'h' {
 		l.advance()
 		l.addToken(TokenFloatLiteral)
 		return
 	}
 
-	// Integer suffixes
-	if l.peek() == 'i' || l.peek() == 'u' {
+	// Integer suffixes: i, u (32-bit), li, lu (64-bit)
+	if l.peek() == 'l' && (l.peekNext() == 'i' || l.peekNext() == 'u') {
+		l.advance() // consume 'l'
+		l.advance() // consume 'i' or 'u'
+	} else if l.peek() == 'i' || l.peek() == 'u' {
 		l.advance()
 	}
 
@@ -343,8 +367,11 @@ var keywords = map[string]TokenKind{
 	"bool":                          TokenBool,
 	"f16":                           TokenF16,
 	"f32":                           TokenF32,
+	"f64":                           TokenF64,
 	"i32":                           TokenI32,
+	"i64":                           TokenI64,
 	"u32":                           TokenU32,
+	"u64":                           TokenU64,
 	"vec2":                          TokenVec2,
 	"vec3":                          TokenVec3,
 	"vec4":                          TokenVec4,

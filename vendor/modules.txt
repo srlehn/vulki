@@ -1,13 +1,17 @@
-# github.com/ebitengine/purego v0.10.0
+# github.com/ebitengine/purego v0.10.1
 ## explicit; go 1.18
 github.com/ebitengine/purego
 github.com/ebitengine/purego/internal/cgo
 github.com/ebitengine/purego/internal/fakecgo
 github.com/ebitengine/purego/internal/strings
 github.com/ebitengine/purego/internal/xreflect
-# github.com/gogpu/naga v0.14.2
+# github.com/gogpu/naga v0.17.15
 ## explicit; go 1.25
 github.com/gogpu/naga
+github.com/gogpu/naga/internal/registry
 github.com/gogpu/naga/ir
 github.com/gogpu/naga/spirv
+github.com/gogpu/naga/spirv/internal/codegen
 github.com/gogpu/naga/wgsl
+github.com/gogpu/naga/wgsl/internal/lower
+github.com/gogpu/naga/wgsl/internal/parser

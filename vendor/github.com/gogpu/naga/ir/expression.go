@@ -28,6 +28,13 @@ type LiteralF64 float64
 
 func (LiteralF64) literalValue() {}
 
+// LiteralF16 represents a 16-bit float literal stored as float32.
+// The value has been rounded to half precision, but is stored as float32
+// for ease of use. Backends should emit with the appropriate f16 suffix.
+type LiteralF16 float32
+
+func (LiteralF16) literalValue() {}
+
 // LiteralF32 represents a 32-bit float literal (may not be NaN or infinity).
 type LiteralF32 float32
 
@@ -74,6 +81,16 @@ type ExprConstant struct {
 }
 
 func (ExprConstant) expressionKind() {}
+
+// ExprOverride references a pipeline-overridable constant.
+// Used in global_expressions and function expressions for override references.
+// Mirrors Rust naga's Expression::Override(Handle<Override>).
+type ExprOverride struct {
+	// Override is the index into Module.Overrides.
+	Override OverrideHandle
+}
+
+func (ExprOverride) expressionKind() {}
 
 // ExprZeroValue represents a zero-initialized value of a given type.
 type ExprZeroValue struct {
@@ -165,6 +182,110 @@ type ExprLoad struct {
 }
 
 func (ExprLoad) expressionKind() {}
+
+// ExprAlias is a transparent passthrough that resolves to another expression.
+//
+// # Backend visibility invariant
+//
+// ExprAlias is a DXIL-internal IR kind. It MUST NOT appear in any module
+// produced by parsing alone: the WGSL frontend never synthesizes it.
+// The only production site is the DXIL backend's mem2reg pass
+// (dxil/internal/passes/mem2reg). Other backends (MSL/GLSL/HLSL/SPIR-V)
+// process the original module (or their own CloneModuleForOverrides
+// clone) and never invoke mem2reg, so they never observe this kind.
+// Their expression-kind type switches treat unknown kinds as errors
+// (e.g. msl/expressions.go writeExpressionInline default returns
+// "unsupported expression kind"), which gives a clear failure mode if
+// the invariant is ever violated.
+//
+// The runtime invariant is verified by TestNoDxilOnlyKindsAfterParse
+// in package ir, which parses every shader in snapshot/testdata/in
+// and asserts no ExprAlias / ExprPhi appears in the resulting module.
+//
+// # Production
+//
+// It is produced by the DXIL backend's mem2reg pass when a promoted local
+// variable's load is rewritten to refer directly to the value last stored
+// into that variable (or, on the first load, to the variable's initializer
+// or a zero value). The DXIL emitter resolves it by returning the source
+// expression's value ID without emitting any instruction of its own.
+//
+// Reference parity: corresponds to the value-substitution step inside LLVM's
+// PromoteMemoryToRegister pass — once an alloca is promoted, every load is
+// rewritten to use the dominating store's stored value, and the load
+// instruction is erased. We achieve the same effect at the IR level with
+// this alias indirection so the existing emit pipeline continues to walk
+// the function's expression arena unmodified.
+type ExprAlias struct {
+	Source ExpressionHandle
+}
+
+func (ExprAlias) expressionKind() {}
+
+// PhiPredKey identifies which structured-CFG predecessor an ExprPhi
+// incoming value flows from. Reference: LLVM PromoteMemoryToRegister.cpp
+// rename pass tracks IncomingVals per predecessor BB; in our structured
+// IR the predecessor is one of a small set of named edges.
+type PhiPredKey uint8
+
+const (
+	// PhiPredIfAccept — value at end of StmtIf.Accept body.
+	PhiPredIfAccept PhiPredKey = iota
+	// PhiPredIfReject — value at end of StmtIf.Reject body (or pre-if value
+	// when Reject is empty / variable not stored there).
+	PhiPredIfReject
+	// PhiPredLoopInit — value at loop header from the pre-loop fall-through edge.
+	PhiPredLoopInit
+	// PhiPredLoopBackEdge — value at loop header from the back-edge
+	// (end of StmtLoop.Continuing or StmtLoop.Body when Continuing is empty).
+	PhiPredLoopBackEdge
+	// PhiPredSwitchCase — base for switch-case predecessors. The actual
+	// predecessor index = uint(PhiPredSwitchCase) + caseIdx, encoded in the
+	// CaseIdx field on PhiIncoming.
+	PhiPredSwitchCase
+	// PhiPredFallThrough — pre-construct value (e.g. into a switch merge
+	// when no case writes to the variable; rarely used in practice but kept
+	// for completeness).
+	PhiPredFallThrough
+)
+
+// PhiIncoming is one (predecessor, value) pair attached to an ExprPhi.
+// PredKey identifies the structured-CFG edge the value flows along.
+// CaseIdx is meaningful only when PredKey == PhiPredSwitchCase.
+type PhiIncoming struct {
+	PredKey PhiPredKey
+	CaseIdx uint32
+	Value   ExpressionHandle
+}
+
+// ExprPhi is an SSA phi node merging values from multiple structured-CFG
+// predecessors.
+//
+// # Backend visibility invariant
+//
+// Same as ExprAlias: DXIL-internal kind, never produced by parsing alone,
+// only synthesized by dxil/internal/passes/mem2reg. Verified by
+// TestNoDxilOnlyKindsAfterParse in package ir.
+//
+// # Production
+//
+// Produced by the DXIL backend's mem2reg pass at if/switch merge points
+// and at loop headers when a promoted local variable is stored on more
+// than one incoming path. The DXIL emitter lowers it to LLVM's
+// FUNC_CODE_INST_PHI at the bitcode-level basic-block prologue, with
+// each incoming value's per-predecessor value-ID resolved via emit-time
+// snapshots taken at the end of each predecessor branch.
+//
+// Reference parity: matches LLVM PromoteMemoryToRegister.cpp's phi
+// insertion at the iterated dominance frontier of defining blocks.
+// Structured CFG makes IDF computation trivial: the merge point is
+// the statement after the StmtIf/StmtSwitch, or the header of a
+// StmtLoop body.
+type ExprPhi struct {
+	Incoming []PhiIncoming
+}
+
+func (ExprPhi) expressionKind() {}
 
 // ExprImageSample samples a point from a sampled or depth image.
 type ExprImageSample struct {
@@ -519,6 +640,139 @@ func (ExprArrayLength) expressionKind() {}
 
 // ExprAtomicResult represents the result of an atomic operation.
 // This is created by StmtAtomic and holds the previous value.
-type ExprAtomicResult struct{}
+// For CompareExchange, Comparison=true and Ty is the result struct type.
+// For other atomics, Comparison=false and Ty is the scalar type.
+type ExprAtomicResult struct {
+	Ty         TypeHandle
+	Comparison bool
+}
 
 func (ExprAtomicResult) expressionKind() {}
+
+// ExprWorkGroupUniformLoadResult represents the result of a workgroup uniform load.
+// Created by StmtWorkGroupUniformLoad, holds the loaded value.
+type ExprWorkGroupUniformLoadResult struct{}
+
+func (ExprWorkGroupUniformLoadResult) expressionKind() {}
+
+// ExprRayQueryProceedResult represents the result of a RayQueryProceed statement.
+// The result is a bool indicating whether there are more intersection candidates.
+type ExprRayQueryProceedResult struct{}
+
+func (ExprRayQueryProceedResult) expressionKind() {}
+
+// ExprRayQueryGetIntersection returns the intersection found by a ray query.
+// If Committed is true, returns the committed intersection (after Proceed returns false).
+// If Committed is false, returns the candidate intersection (during Proceed).
+type ExprRayQueryGetIntersection struct {
+	Query     ExpressionHandle
+	Committed bool
+}
+
+func (ExprRayQueryGetIntersection) expressionKind() {}
+
+// ExprSubgroupBallotResult represents the result of a SubgroupBallot statement.
+// The result type is always vec4<u32>.
+type ExprSubgroupBallotResult struct{}
+
+func (ExprSubgroupBallotResult) expressionKind() {}
+
+// ExprSubgroupOperationResult represents the result of a SubgroupCollectiveOperation
+// or SubgroupGather statement. The Type field holds the result type.
+type ExprSubgroupOperationResult struct {
+	Type TypeHandle
+}
+
+func (ExprSubgroupOperationResult) expressionKind() {}
+
+// SubgroupOperation represents the kind of subgroup collective operation.
+type SubgroupOperation uint8
+
+const (
+	SubgroupOperationAll SubgroupOperation = iota
+	SubgroupOperationAny
+	SubgroupOperationAdd
+	SubgroupOperationMul
+	SubgroupOperationMin
+	SubgroupOperationMax
+	SubgroupOperationAnd
+	SubgroupOperationOr
+	SubgroupOperationXor
+)
+
+// CollectiveOperation represents how subgroup results are combined.
+type CollectiveOperation uint8
+
+const (
+	CollectiveReduce        CollectiveOperation = iota // Reduce across all invocations
+	CollectiveInclusiveScan                            // Inclusive prefix scan
+	CollectiveExclusiveScan                            // Exclusive prefix scan
+)
+
+// GatherMode represents the specific behavior of a SubgroupGather statement.
+type GatherMode interface {
+	gatherMode()
+}
+
+// GatherBroadcastFirst gathers from the active lane with the smallest index.
+type GatherBroadcastFirst struct{}
+
+func (GatherBroadcastFirst) gatherMode() {}
+
+// GatherBroadcast gathers from the same lane at the given index.
+type GatherBroadcast struct {
+	Index ExpressionHandle
+}
+
+func (GatherBroadcast) gatherMode() {}
+
+// GatherShuffle gathers from a different lane at the given index.
+type GatherShuffle struct {
+	Index ExpressionHandle
+}
+
+func (GatherShuffle) gatherMode() {}
+
+// GatherShuffleDown gathers from the lane plus the given shift.
+type GatherShuffleDown struct {
+	Delta ExpressionHandle
+}
+
+func (GatherShuffleDown) gatherMode() {}
+
+// GatherShuffleUp gathers from the lane minus the given shift.
+type GatherShuffleUp struct {
+	Delta ExpressionHandle
+}
+
+func (GatherShuffleUp) gatherMode() {}
+
+// GatherShuffleXor gathers from the lane xored with the given value.
+type GatherShuffleXor struct {
+	Mask ExpressionHandle
+}
+
+func (GatherShuffleXor) gatherMode() {}
+
+// GatherQuadBroadcast gathers from the same quad lane at the given index.
+type GatherQuadBroadcast struct {
+	Index ExpressionHandle
+}
+
+func (GatherQuadBroadcast) gatherMode() {}
+
+// GatherQuadSwap gathers from the opposite quad lane along the given direction.
+type GatherQuadSwap struct {
+	Direction QuadDirection
+}
+
+func (GatherQuadSwap) gatherMode() {}
+
+// QuadDirection represents the direction for quad swap operations.
+type QuadDirection uint8
+
+const (
+	QuadDirectionX        QuadDirection = iota // Horizontal swap
+	QuadDirectionY                             // Vertical swap
+	QuadDirectionDiagonal                      // Diagonal swap
+)
