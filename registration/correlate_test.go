@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/srlehn/vulki"
+	"github.com/srlehn/vulki/internal/testutils"
 	"github.com/srlehn/vulki/vk"
 )
 
@@ -807,7 +808,7 @@ func TestLogPolar_SamplesFromDC(t *testing.T) {
 func TestPhase1_RotationDetection(t *testing.T) {
 	ctx := testContext(t)
 
-	imgA := loadTestImage(t, "../testdata/snake.png")
+	imgA := loadTestDataImage(t, "snake.png")
 	imgB := bilinearWarp(imgA, -12, 1)
 	if fixture := os.Getenv("VULKI_ROTATION_FIXTURE"); fixture != "" {
 		imgB = loadTestImage(t, fixture)
@@ -847,7 +848,7 @@ func TestPhase1_RotationDetection(t *testing.T) {
 }
 
 func TestPhaseCorrelateGPU_KnownTransform(t *testing.T) {
-	imgA := loadTestImage(t, "../testdata/snake.png")
+	imgA := loadTestDataImage(t, "snake.png")
 	corr, err := NewCorrelator(
 		imgA.Bounds().Dx(),
 		imgA.Bounds().Dy(),
@@ -924,6 +925,15 @@ func loadTestImage(t *testing.T, path string) *image.RGBA {
 		}
 	}
 	return rgba
+}
+
+func loadTestDataImage(t *testing.T, name string) *image.RGBA {
+	t.Helper()
+	path, err := testutils.GetTestDataFilePath(name)
+	if err != nil {
+		t.Fatalf("locate test image %q: %v", name, err)
+	}
+	return loadTestImage(t, path)
 }
 
 // --- Reference CPU FFT to validate GPU FFT ---

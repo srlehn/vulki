@@ -9,7 +9,7 @@ import (
 )
 
 func TestPhaseCorrelateCPU_KnownTransform(t *testing.T) {
-	imgA := loadTestImage(t, "../testdata/snake.png")
+	imgA := loadTestDataImage(t, "snake.png")
 	corr, err := NewCorrelator(
 		imgA.Bounds().Dx(),
 		imgA.Bounds().Dy(),
