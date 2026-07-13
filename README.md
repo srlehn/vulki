@@ -30,9 +30,9 @@ The GPU path stages each packed input once, keeps every intermediate on the
 device, and includes both uploads and the 64-byte result readback in one Vulkan
 queue submission.
 
-The Linux loader path is tested. Library lookup exists for Windows but is not
-yet verified. macOS portability-instance handling is not implemented, so macOS
-is not currently supported even when MoltenVK is installed.
+The Linux Vulkan path is the only GPU path with current runtime evidence.
+Windows, Android, Apple platforms, browser support, and other platform work are
+backlog only and are not currently supported.
 
 ## Install
 
@@ -57,11 +57,21 @@ go install github.com/srlehn/vulki/cmd/correlate@latest
 - `shader` compiles WGSL source to SPIR-V.
 - `vk` contains the low-level Vulkan types, constants, loader, and function
   wrappers used by the direct implementation.
-- `imgproc` contains an experimental FFT-based phase-correlation pipeline for
+- `registration` contains an experimental FFT-based phase-correlation pipeline for
   estimating rotation, scale, and translation between images.
-- `compute` is the lower-level Vulkan-backed resource layer retained while
-  `imgproc` is migrated to the root API. New general compute code should use
-  the root package.
+
+### Migration from the legacy packages
+
+- Replace `compute.NewContext` with `vulki.Open` and let each root resource
+  remember its creating device.
+- Replace Vulkan buffer flags and typed buffers with `Device.NewBuffer` plus
+  explicit byte encoders matching the WGSL layout.
+- Replace permanently bound compute pipelines with `Device.NewKernel` and
+  reusable `Kernel.NewBindings` sets.
+- Replace `shader.Compile(source, nil)` with `shader.Compile(source)` or the
+  package's functional options.
+- Replace the `imgproc` import path with `registration`; use its single
+  `NewCorrelator` constructor and functional options.
 
 The smallest complete compute example is in
 [`cmd/demo`](cmd/demo). Its core setup looks like this:
@@ -99,9 +109,10 @@ defer kernel.Close()
 ```
 
 Bind concrete buffers with `Kernel.NewBindings`, upload raw bytes through the
-buffer, and call `Device.DispatchAndWait`. Use a `Recorder` to batch aligned
-inline updates, explicit compute barriers, and multiple dispatches into one
-blocking queue submission. The complete checked example is in `cmd/demo`.
+buffer, and call `Device.DispatchAndWait`. Use a `Recorder` to batch arbitrary
+recorded uploads and downloads, aligned inline updates, explicit compute
+barriers, and multiple dispatches into one blocking queue submission. The
+complete checked example is in `cmd/demo`.
 
 ## Commands
 
@@ -131,7 +142,7 @@ reference algorithm are implemented explicitly.
 
 Phase-correlation peaks are normalized to the theoretical `[0, 1]` range.
 Matches at or below the paper's `0.03` validity threshold return
-`imgproc.ErrLowConfidence` instead of a transform.
+`registration.ErrLowConfidence` instead of a transform.
 
 Run the randomized registration self-test for one PNG. Add `-save` to write a
 stacked comparison image:
@@ -144,9 +155,10 @@ The registration command is a research tool. Its reported transform should be
 checked against known inputs before relying on it.
 
 Library users get the same GPU-first behavior from
-`imgproc.NewCorrelator(maxW, maxH)`. Pass
-`imgproc.WithBackend(imgproc.BackendVulkan)` or
-`imgproc.WithBackend(imgproc.BackendCPU)` to require a backend.
+`registration.NewCorrelator(maxW, maxH)`. Pass
+`registration.WithBackend(registration.BackendVulkan)` or
+`registration.WithBackend(registration.BackendCPU)` to require a backend, or
+use `registration.WithDevice(device)` to borrow an existing root device.
 `Correlator.Backend` reports the implementation actually in use, and
 `FallbackReason` explains an automatic CPU selection. `PhaseCorrelate` accepts
 any `image.Image` implementation and converts non-RGBA inputs internally.
@@ -158,8 +170,9 @@ go test ./...
 go vet ./...
 ```
 
-CPU registration tests run on every platform. GPU tests skip when no suitable
-Vulkan loader, driver, or device is available.
+CPU registration tests do not establish support for untested platforms. GPU
+tests skip when no suitable Vulkan loader, driver, or device is available; a
+skip is not GPU evidence.
 When `spirv-val` is installed, the image-processing shader test also validates
 every generated module against the Vulkan 1.1 SPIR-V rules.
 

@@ -70,6 +70,29 @@ func TestDeviceCloseContinuesAfterWaitError(t *testing.T) {
 	}
 }
 
+func TestDeviceClosedReportsLifecycle(t *testing.T) {
+	if !(*Device)(nil).Closed() {
+		t.Fatal("nil Device reported open")
+	}
+	if !new(Device).Closed() {
+		t.Fatal("zero Device reported open")
+	}
+	var cleanup []string
+	device, err := openWithHooks(fakeOpenHooks("", nil, &cleanup))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if device.Closed() {
+		t.Fatal("open Device reported closed")
+	}
+	if err := device.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !device.Closed() {
+		t.Fatal("closed Device reported open")
+	}
+}
+
 func TestDeviceClosesChildrenInReverseCreationOrder(t *testing.T) {
 	var cleanup []string
 	device, err := openWithHooks(fakeOpenHooks("", nil, &cleanup))

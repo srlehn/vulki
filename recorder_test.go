@@ -1,7 +1,11 @@
 package vulki
 
 import (
+	"bytes"
+	"errors"
+	"reflect"
 	"testing"
+	"unsafe"
 
 	"github.com/srlehn/vulki/vk"
 )
@@ -89,6 +93,52 @@ func TestRecorderBatchesUpdateAndDispatchesDirectVulkan(t *testing.T) {
 	}
 }
 
+func TestRecorderArbitraryUploadAndDownloadDirectVulkan(t *testing.T) {
+	device, err := Open()
+	if err != nil {
+		t.Skipf("direct Vulkan device unavailable: %v", err)
+	}
+	defer device.Close()
+	buffer, err := device.NewBuffer(70200)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+	defer buffer.Close()
+	recorder, err := device.NewRecorder()
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	input := make([]byte, 70001)
+	for index := range input {
+		input[index] = byte(index*17 + 5)
+	}
+	patch := make([]byte, 127)
+	for index := range patch {
+		patch[index] = byte(index*29 + 11)
+	}
+	want := append(append(make([]byte, 0, len(input)+len(patch)), input...), patch...)
+	if err := recorder.Upload(buffer, 3, input); err != nil {
+		t.Fatalf("first Upload: %v", err)
+	}
+	if err := recorder.Upload(buffer, 3+uint64(len(input)), patch); err != nil {
+		t.Fatalf("second Upload: %v", err)
+	}
+	clear(input)
+	clear(patch)
+	output := make([]byte, len(want))
+	if err := recorder.Download(buffer, 3, output); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if err := recorder.SubmitAndWait(); err != nil {
+		t.Fatalf("SubmitAndWait: %v", err)
+	}
+	if !bytes.Equal(output, want) {
+		t.Fatal("recorded arbitrary-size round trip differs")
+	}
+}
+
 func TestRecorderRejectsInvalidUpdatesBeforeBackend(t *testing.T) {
 	device, _, _ := fakeBufferDevice("")
 	buffer, err := device.NewBuffer(16)
@@ -112,6 +162,133 @@ func TestRecorderRejectsInvalidUpdatesBeforeBackend(t *testing.T) {
 				t.Fatal("invalid update succeeded")
 			}
 		})
+	}
+}
+
+func TestRecorderRejectsInvalidTransfersBeforeBackend(t *testing.T) {
+	first, _, firstCreates := fakeBufferDevice("")
+	second, _, _ := fakeBufferDevice("")
+	buffer, err := first.NewBuffer(16)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+	other, err := second.NewBuffer(16)
+	if err != nil {
+		t.Fatalf("other NewBuffer: %v", err)
+	}
+	defer other.Close()
+	recorder := &Recorder{device: first, state: recorderRecording}
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "nil upload", call: func() error { return recorder.Upload(nil, 0, []byte{1}) }},
+		{name: "wrong owner upload", call: func() error { return recorder.Upload(other, 0, []byte{1}) }},
+		{name: "upload bounds", call: func() error { return recorder.Upload(buffer, 15, []byte{1, 2}) }},
+		{name: "nil download", call: func() error { return recorder.Download(nil, 0, make([]byte, 1)) }},
+		{name: "wrong owner download", call: func() error { return recorder.Download(other, 0, make([]byte, 1)) }},
+		{name: "download bounds", call: func() error { return recorder.Download(buffer, 17, nil) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); err == nil {
+				t.Fatal("invalid transfer succeeded")
+			}
+		})
+	}
+	if got := *firstCreates; got != 1 {
+		t.Fatalf("invalid transfers created %d buffers, want only storage buffer", got)
+	}
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := recorder.Upload(buffer, 0, nil); err == nil {
+		t.Fatal("upload to closed buffer succeeded")
+	}
+	if err := recorder.Download(buffer, 0, nil); err == nil {
+		t.Fatal("download from closed buffer succeeded")
+	}
+}
+
+func TestRecorderUploadCleansFailedTransferAllocation(t *testing.T) {
+	tests := []struct {
+		failure string
+		want    []string
+	}{
+		{failure: "staging-create"},
+		{failure: "staging-memory-type", want: []string{"destroy-buffer:2"}},
+		{failure: "staging-allocate", want: []string{"destroy-buffer:2"}},
+		{failure: "staging-bind", want: []string{"destroy-buffer:2", "free-memory:2"}},
+	}
+	for _, test := range tests {
+		t.Run(test.failure, func(t *testing.T) {
+			device, events, _ := fakeBufferDevice(test.failure)
+			buffer, err := device.NewBuffer(16)
+			if err != nil {
+				t.Fatalf("NewBuffer: %v", err)
+			}
+			defer buffer.Close()
+			recorder := &Recorder{device: device, state: recorderRecording}
+			if err := recorder.Upload(buffer, 0, []byte{1}); err == nil {
+				t.Fatal("Upload succeeded")
+			}
+			if !reflect.DeepEqual(*events, test.want) {
+				t.Fatalf("cleanup = %v, want %v", *events, test.want)
+			}
+		})
+	}
+}
+
+func TestRecorderAbortReleasesTransferAndBuffer(t *testing.T) {
+	device, events, _ := fakeBufferDevice("")
+	buffer, err := device.NewBuffer(16)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+	mapped := make([]byte, 16)
+	device.state.ops.mapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory, uint64, uint64) (unsafe.Pointer, error) {
+		return unsafe.Pointer(&mapped[0]), nil
+	}
+	device.state.ops.unmapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory) {}
+	device.state.ops.bufferBarriers = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier) {
+	}
+	device.state.ops.copyBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, vk.Buffer, []vk.BufferCopy) {}
+	recorder := &Recorder{device: device, state: recorderRecording}
+	if err := recorder.Upload(buffer, 0, []byte{1, 2, 3}); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if err := buffer.Close(); err == nil {
+		t.Fatal("buffer closed while retained by recorder")
+	}
+	if err := recorder.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("buffer Close after Abort: %v", err)
+	}
+	want := []string{"destroy-buffer:2", "free-memory:2", "destroy-buffer:1", "free-memory:1"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("cleanup = %v, want %v", *events, want)
+	}
+}
+
+func TestRecorderUploadCleansMapFailure(t *testing.T) {
+	device, events, _ := fakeBufferDevice("")
+	buffer, err := device.NewBuffer(16)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+	defer buffer.Close()
+	device.state.ops.mapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory, uint64, uint64) (unsafe.Pointer, error) {
+		return nil, errors.New("injected map failure")
+	}
+	recorder := &Recorder{device: device, state: recorderRecording}
+	if err := recorder.Upload(buffer, 0, []byte{1}); err == nil {
+		t.Fatal("Upload succeeded")
+	}
+	want := []string{"destroy-buffer:2", "free-memory:2"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("cleanup = %v, want %v", *events, want)
 	}
 }
 

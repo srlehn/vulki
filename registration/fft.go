@@ -1,11 +1,10 @@
-package imgproc
+package registration
 
 import (
 	"encoding/binary"
 	"math"
 
-	"github.com/srlehn/vulki/compute"
-	"github.com/srlehn/vulki/vk"
+	"github.com/srlehn/vulki"
 )
 
 // fftParams holds the parameters written to the GPU params buffer for bit-reversal.
@@ -31,11 +30,11 @@ type fftButterflyParams struct {
 // The data buffer contains W*H complex elements in row-major order.
 // bitrevPipe and butterflyPipe must have the data buffer at binding 0 and params at binding 1.
 func recordFFT2D(
-	rec *compute.CommandRecorder,
-	dataBuf vk.Buffer,
-	paramsBuf vk.Buffer,
-	bitrevPipe *compute.Pipeline,
-	butterflyPipe *compute.Pipeline,
+	rec *gpuRecorder,
+	dataBuf *vulki.Buffer,
+	paramsBuf *vulki.Buffer,
+	bitrevPipe *gpuPipeline,
+	butterflyPipe *gpuPipeline,
 	w, h int,
 	inverse bool,
 ) {
@@ -53,11 +52,11 @@ func recordFFT2D(
 }
 
 func recordFFT1D(
-	rec *compute.CommandRecorder,
-	dataBuf vk.Buffer,
-	paramsBuf vk.Buffer,
-	bitrevPipe *compute.Pipeline,
-	butterflyPipe *compute.Pipeline,
+	rec *gpuRecorder,
+	dataBuf *vulki.Buffer,
+	paramsBuf *vulki.Buffer,
+	bitrevPipe *gpuPipeline,
+	butterflyPipe *gpuPipeline,
 	n, numLines int,
 	axis uint32,
 	stride int,
@@ -76,8 +75,7 @@ func recordFFT1D(
 			Stride:   uint32(stride),
 		}
 		data := encodeBitrevParams(p)
-		rec.UpdateBuffer(paramsBuf, 0, data)
-		rec.BarrierTransferToCompute(paramsBuf)
+		rec.Update(paramsBuf, data)
 		rec.Bind(bitrevPipe)
 		total := uint32(n * numLines)
 		rec.Dispatch((total+wgSize-1)/wgSize, 1, 1)
@@ -95,8 +93,7 @@ func recordFFT1D(
 			Inverse:  inverse,
 		}
 		data := encodeButterflyParams(p)
-		rec.UpdateBuffer(paramsBuf, 0, data)
-		rec.BarrierTransferToCompute(paramsBuf)
+		rec.Update(paramsBuf, data)
 		rec.Bind(butterflyPipe)
 		pairsPerLine := uint32(n) / 2
 		total := pairsPerLine * uint32(numLines)

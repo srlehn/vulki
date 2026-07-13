@@ -18,8 +18,6 @@ const modulePath = "github.com/srlehn/vulki"
 
 var publicPackageDirs = []string{
 	".",
-	"compute",
-	"imgproc",
 	"registration",
 	"shader",
 	"vk",

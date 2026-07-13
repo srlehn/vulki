@@ -1,4 +1,4 @@
-package imgproc
+package registration
 
 import (
 	"fmt"
@@ -9,18 +9,18 @@ import (
 
 func newCPUCorrelator(maxW, maxH int) (*Correlator, error) {
 	if maxW < 2 || maxH < 2 {
-		return nil, fmt.Errorf("imgproc: maximum dimensions must both be at least 2 pixels")
+		return nil, fmt.Errorf("registration: maximum dimensions must both be at least 2 pixels")
 	}
 	maxInt := int(^uint(0) >> 1)
 	if maxW > maxInt/maxH {
-		return nil, fmt.Errorf("imgproc: maximum image area overflows int")
+		return nil, fmt.Errorf("registration: maximum image area overflows int")
 	}
 	padSize, ok := nextPow2Checked(min(maxW, maxH))
 	if !ok || padSize > maxInt/padSize {
-		return nil, fmt.Errorf("imgproc: padded image area overflows int")
+		return nil, fmt.Errorf("registration: padded image area overflows int")
 	}
 	if padSize*padSize > maxExactFloat32Index {
-		return nil, fmt.Errorf("imgproc: padded image area exceeds CPU backend limit")
+		return nil, fmt.Errorf("registration: padded image area exceeds CPU backend limit")
 	}
 
 	return &Correlator{
@@ -36,27 +36,27 @@ func newCPUCorrelator(maxW, maxH int) (*Correlator, error) {
 
 func (c *Correlator) phaseCorrelateCPU(imgA, imgB *image.RGBA) (*Result, error) {
 	if imgA == nil || imgB == nil {
-		return nil, fmt.Errorf("imgproc: input images must not be nil")
+		return nil, fmt.Errorf("registration: input images must not be nil")
 	}
 	wA, hA := imgA.Bounds().Dx(), imgA.Bounds().Dy()
 	wB, hB := imgB.Bounds().Dx(), imgB.Bounds().Dy()
 	if wA != wB || hA != hB {
-		return nil, fmt.Errorf("imgproc: input images must have equal dimensions, got %dx%d and %dx%d", wA, hA, wB, hB)
+		return nil, fmt.Errorf("registration: input images must have equal dimensions, got %dx%d and %dx%d", wA, hA, wB, hB)
 	}
 	if wA < 2 || hA < 2 {
-		return nil, fmt.Errorf("imgproc: input dimensions must both be at least 2 pixels")
+		return nil, fmt.Errorf("registration: input dimensions must both be at least 2 pixels")
 	}
 	if wA > c.maxW || hA > c.maxH {
-		return nil, fmt.Errorf("imgproc: input dimensions %dx%d exceed correlator maximum %dx%d", wA, hA, c.maxW, c.maxH)
+		return nil, fmt.Errorf("registration: input dimensions %dx%d exceed correlator maximum %dx%d", wA, hA, c.maxW, c.maxH)
 	}
 
 	pixelsA, err := packRGBA(imgA)
 	if err != nil {
-		return nil, fmt.Errorf("imgproc: image A: %w", err)
+		return nil, fmt.Errorf("registration: image A: %w", err)
 	}
 	pixelsB, err := packRGBA(imgB)
 	if err != nil {
-		return nil, fmt.Errorf("imgproc: image B: %w", err)
+		return nil, fmt.Errorf("registration: image B: %w", err)
 	}
 
 	cropSize := min(wA, hA)
@@ -113,7 +113,7 @@ func (c *Correlator) phaseCorrelateCPU(imgA, imgB *image.RGBA) (*Result, error) 
 	if !finiteCPU(angleDeg) || !finiteCPU(scale) || scale <= 0 ||
 		!finiteCPU(rotationConfidence) || !finiteCPU(best.tx) ||
 		!finiteCPU(best.ty) || !finiteCPU(best.confidence) {
-		return nil, fmt.Errorf("imgproc: CPU pipeline returned a non-finite transform")
+		return nil, fmt.Errorf("registration: CPU pipeline returned a non-finite transform")
 	}
 	if rotationConfidence <= minimumMatchConfidence || best.confidence <= minimumMatchConfidence {
 		return nil, fmt.Errorf("%w: rotation %.5f, translation %.5f, minimum %.2f",

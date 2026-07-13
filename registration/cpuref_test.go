@@ -1,11 +1,11 @@
-package imgproc
+package registration
 
 import (
 	"errors"
 	"image"
 	"testing"
 
-	"github.com/srlehn/vulki/compute"
+	"github.com/srlehn/vulki"
 )
 
 func TestPhaseCorrelateCPU_KnownTransform(t *testing.T) {
@@ -79,7 +79,7 @@ func TestPhaseCorrelateRejectsTypedNilImage(t *testing.T) {
 
 func TestAutoCorrelatorFallsBackToCPU(t *testing.T) {
 	gpuErr := errors.New("test Vulkan failure")
-	corr, err := newAutoCorrelator(64, 64, func() (*compute.Context, error) {
+	corr, err := newAutoCorrelator(64, 64, func() (*vulki.Device, error) {
 		return nil, gpuErr
 	})
 	if err != nil {
@@ -115,5 +115,65 @@ func TestNewCorrelatorRejectsDuplicateBackend(t *testing.T) {
 		WithBackend(BackendCPU),
 	); err == nil {
 		t.Fatal("duplicate backend option was accepted")
+	}
+}
+
+func TestNewCorrelatorRejectsNilAndClosedBorrowedDevice(t *testing.T) {
+	if _, err := NewCorrelator(64, 64, WithDevice(nil)); err == nil {
+		t.Fatal("nil borrowed device was accepted")
+	}
+	if _, err := NewCorrelator(64, 64, WithDevice(new(vulki.Device))); err == nil {
+		t.Fatal("closed borrowed device was accepted")
+	}
+}
+
+func TestNewCorrelatorBorrowsDevice(t *testing.T) {
+	device, err := vulki.Open()
+	if err != nil {
+		t.Skipf("Vulkan unavailable: %v", err)
+	}
+	defer device.Close()
+
+	corr, err := NewCorrelator(64, 64, WithDevice(device))
+	if err != nil {
+		t.Fatalf("NewCorrelator: %v", err)
+	}
+	if err := corr.Close(); err != nil {
+		t.Fatalf("Correlator.Close: %v", err)
+	}
+	if err := corr.Close(); err != nil {
+		t.Fatalf("second Correlator.Close: %v", err)
+	}
+	if device.Closed() {
+		t.Fatal("Correlator.Close closed its borrowed device")
+	}
+	buffer, err := device.NewBuffer(4)
+	if err != nil {
+		t.Fatalf("borrowed device is unusable after Correlator.Close: %v", err)
+	}
+	_ = buffer.Close()
+}
+
+func TestNewCorrelatorRejectsConflictingAndRepeatedDeviceOptions(t *testing.T) {
+	device, err := vulki.Open()
+	if err != nil {
+		t.Skipf("Vulkan unavailable: %v", err)
+	}
+	defer device.Close()
+
+	tests := []struct {
+		name    string
+		options []Option
+	}{
+		{name: "backend then device", options: []Option{WithBackend(BackendVulkan), WithDevice(device)}},
+		{name: "device then backend", options: []Option{WithDevice(device), WithBackend(BackendVulkan)}},
+		{name: "repeated device", options: []Option{WithDevice(device), WithDevice(device)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewCorrelator(64, 64, test.options...); err == nil {
+				t.Fatal("invalid option combination was accepted")
+			}
+		})
 	}
 }

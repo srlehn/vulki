@@ -1,4 +1,4 @@
-package imgproc
+package registration
 
 import (
 	"image"
@@ -65,7 +65,7 @@ func TestNormalizeComplex(t *testing.T) {
 }
 
 func TestFind2DPeak_DeltaAtOrigin(t *testing.T) {
-	// A delta function at (0,0) — peak should be at (0,0).
+	// A delta function at (0,0) has its peak at (0,0).
 	w, h := 16, 16
 	data := make([][2]float32, w*h)
 	data[0] = [2]float32{100, 0}

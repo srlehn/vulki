@@ -174,6 +174,11 @@ func (b *Buffer) Size() uint64 {
 	return b.size
 }
 
+// Buffer transfers deliberately use Upload and Download rather than the io
+// interfaces. A Buffer has no stream cursor, uses uint64 resource offsets, and
+// reports completion for the entire requested GPU transfer instead of a
+// partial byte count. The At variants use absolute byte offsets.
+
 // Upload copies data to the beginning of the buffer and blocks until the copy
 // completes.
 func (b *Buffer) Upload(data []byte) error {
@@ -381,58 +386,67 @@ func (b *Buffer) ensureStaging(state *deviceState) error {
 	if b.stagingBuffer != 0 {
 		return nil
 	}
+	buffer, memory, err := createTransferResources(state, b.size)
+	if err != nil {
+		return err
+	}
+	b.stagingBuffer = buffer
+	b.stagingMemory = memory
+	return nil
+}
+
+func createTransferResources(state *deviceState, size uint64) (vk.Buffer, vk.DeviceMemory, error) {
 	info := vk.BufferCreateInfo{
 		SType:       vk.StructureTypeBufferCreateInfo,
-		Size:        b.size,
+		Size:        size,
 		Usage:       vk.BufferUsageTransferSrcBit | vk.BufferUsageTransferDstBit,
 		SharingMode: vk.SharingModeExclusive,
 	}
-	var err error
-	b.stagingBuffer, err = state.ops.createBuffer(state.deviceFns, state.device, &info)
+	buffer, err := state.ops.createBuffer(state.deviceFns, state.device, &info)
 	if err != nil {
-		return fmt.Errorf("vulki: create transfer buffer: %w", err)
+		return 0, 0, fmt.Errorf("vulki: create transfer buffer: %w", err)
 	}
-	requirements := state.ops.bufferMemoryRequirements(state.deviceFns, state.device, b.stagingBuffer)
+	requirements := state.ops.bufferMemoryRequirements(state.deviceFns, state.device, buffer)
 	memoryIndex, err := findMemoryType(
 		state.memory,
 		requirements.MemoryTypeBits,
 		vk.MemoryPropertyHostVisibleBit|vk.MemoryPropertyHostCoherentBit,
 	)
 	if err != nil {
-		state.ops.destroyBuffer(state.deviceFns, state.device, b.stagingBuffer)
-		b.stagingBuffer = 0
-		return fmt.Errorf("vulki: select host-visible transfer memory: %w", err)
+		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
+		return 0, 0, fmt.Errorf("vulki: select host-visible transfer memory: %w", err)
 	}
 	allocation := vk.MemoryAllocateInfo{
 		SType:           vk.StructureTypeMemoryAllocateInfo,
 		AllocationSize:  requirements.Size,
 		MemoryTypeIndex: memoryIndex,
 	}
-	b.stagingMemory, err = state.ops.allocateMemory(state.deviceFns, state.device, &allocation)
+	memory, err := state.ops.allocateMemory(state.deviceFns, state.device, &allocation)
 	if err != nil {
-		state.ops.destroyBuffer(state.deviceFns, state.device, b.stagingBuffer)
-		b.stagingBuffer = 0
-		return fmt.Errorf("vulki: allocate transfer memory: %w", err)
+		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
+		return 0, 0, fmt.Errorf("vulki: allocate transfer memory: %w", err)
 	}
-	if err := state.ops.bindBufferMemory(state.deviceFns, state.device, b.stagingBuffer, b.stagingMemory, 0); err != nil {
-		state.ops.destroyBuffer(state.deviceFns, state.device, b.stagingBuffer)
-		state.ops.freeMemory(state.deviceFns, state.device, b.stagingMemory)
-		b.stagingBuffer = 0
-		b.stagingMemory = 0
-		return fmt.Errorf("vulki: bind transfer memory: %w", err)
+	if err := state.ops.bindBufferMemory(state.deviceFns, state.device, buffer, memory, 0); err != nil {
+		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
+		state.ops.freeMemory(state.deviceFns, state.device, memory)
+		return 0, 0, fmt.Errorf("vulki: bind transfer memory: %w", err)
 	}
-	return nil
+	return buffer, memory, nil
+}
+
+func destroyTransferResources(state *deviceState, buffer vk.Buffer, memory vk.DeviceMemory) {
+	if buffer != 0 {
+		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
+	}
+	if memory != 0 {
+		state.ops.freeMemory(state.deviceFns, state.device, memory)
+	}
 }
 
 func (b *Buffer) closeNative(state *deviceState) {
-	if b.stagingBuffer != 0 {
-		state.ops.destroyBuffer(state.deviceFns, state.device, b.stagingBuffer)
-		b.stagingBuffer = 0
-	}
-	if b.stagingMemory != 0 {
-		state.ops.freeMemory(state.deviceFns, state.device, b.stagingMemory)
-		b.stagingMemory = 0
-	}
+	destroyTransferResources(state, b.stagingBuffer, b.stagingMemory)
+	b.stagingBuffer = 0
+	b.stagingMemory = 0
 	if b.buffer != 0 {
 		state.ops.destroyBuffer(state.deviceFns, state.device, b.buffer)
 		b.buffer = 0

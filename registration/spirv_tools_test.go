@@ -1,4 +1,4 @@
-package imgproc
+package registration
 
 import (
 	"bytes"

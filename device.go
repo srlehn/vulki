@@ -276,6 +276,16 @@ func (d *Device) Info() DeviceInfo {
 	return d.info
 }
 
+// Closed reports whether the Device is nil, closing, or closed.
+func (d *Device) Closed() bool {
+	if d == nil {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.state == nil || d.closing || d.closed
+}
+
 // Close waits for active queue work, closes remaining child resources in
 // reverse creation order, and releases the native device. Cleanup continues
 // after a wait or child error. Repeated calls after cleanup return nil.

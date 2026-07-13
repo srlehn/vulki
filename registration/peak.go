@@ -1,4 +1,4 @@
-package imgproc
+package registration
 
 import (
 	"image"
@@ -301,7 +301,7 @@ func realToComplex(data []float32) [][2]float32 {
 }
 
 // grayPad converts an RGBA image to grayscale float32 and zero-pads to padSize.
-// No DoG, no Hann, no cropping — used for Phase 2 translation per Reddy & Chatterji.
+// No DoG, Hann, or cropping is used for Phase 2 translation per Reddy & Chatterji.
 func grayPad(img *image.RGBA, padSize int) []float32 {
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()

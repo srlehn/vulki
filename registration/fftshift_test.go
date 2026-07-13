@@ -1,18 +1,13 @@
-package imgproc
+package registration
 
 import (
-	"github.com/srlehn/vulki/compute"
-	"github.com/srlehn/vulki/shader"
-	"github.com/srlehn/vulki/vk"
 	"testing"
+
+	"github.com/srlehn/vulki/vk"
 )
 
 func TestFftshift(t *testing.T) {
-	ctx, err := compute.NewContext()
-	if err != nil {
-		t.Fatalf("compute context: %v", err)
-	}
-	defer ctx.Close()
+	ctx := testContext(t)
 
 	// Create a simple 4x4 array where value = row*4+col.
 	w, h := 4, 4
@@ -34,7 +29,7 @@ func TestFftshift(t *testing.T) {
 	// [6  7  4  5 ]
 
 	usage := vk.BufferUsageStorageBufferBit
-	buf, err := compute.NewTypedBuffer[float32](ctx, n, usage)
+	buf, err := newTestTypedBuffer[float32](ctx, n, usage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,21 +39,12 @@ func TestFftshift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer paramsBuf.Destroy(ctx)
+	defer paramsBuf.Close()
 
-	spirv, err := shader.Compile(fftshiftWGSL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	pipe, err := ctx.CreateComputePipeline(spirv, []compute.BufferBinding{
-		{Binding: 0, Buffer: buf.Buf},
-		{Binding: 1, Buffer: paramsBuf},
+	pipe := compilePipeline(t, ctx, fftshiftWGSL, []testBufferBinding{
+		bb(0, buf.Buf),
+		bb(1, paramsBuf),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pipe.Destroy(ctx)
 
 	if err := buf.UploadSlice(ctx, data); err != nil {
 		t.Fatal(err)
@@ -69,11 +55,11 @@ func TestFftshift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec.UpdateBuffer(paramsBuf.DeviceBuffer, 0, params)
-	rec.BarrierTransferToCompute(paramsBuf.DeviceBuffer)
+	rec.UpdateBuffer(paramsBuf, 0, params)
+	rec.BarrierTransferToCompute(paramsBuf)
 	rec.Bind(pipe)
 	rec.Dispatch(uint32(n/2+63)/64, 1, 1)
-	rec.Barrier(buf.Buf.DeviceBuffer)
+	rec.Barrier(buf.Buf)
 	if err := rec.Submit(); err != nil {
 		t.Fatal(err)
 	}

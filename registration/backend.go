@@ -1,9 +1,9 @@
-package imgproc
+package registration
 
 import (
 	"fmt"
 
-	"github.com/srlehn/vulki/compute"
+	"github.com/srlehn/vulki"
 )
 
 // Backend selects a phase-correlation implementation.
@@ -25,22 +25,46 @@ type Option func(*correlatorConfig) error
 type correlatorConfig struct {
 	backend    Backend
 	backendSet bool
+	device     *vulki.Device
+	deviceSet  bool
 }
 
 // WithBackend selects automatic fallback, direct Vulkan, or CPU execution.
 // It may be supplied at most once.
 func WithBackend(backend Backend) Option {
 	return func(config *correlatorConfig) error {
+		if config.deviceSet {
+			return fmt.Errorf("registration: backend and device options cannot be combined")
+		}
 		if config.backendSet {
-			return fmt.Errorf("imgproc: backend option is already set")
+			return fmt.Errorf("registration: backend option is already set")
 		}
 		switch backend {
 		case BackendAuto, BackendVulkan, BackendCPU:
 		default:
-			return fmt.Errorf("imgproc: unknown backend %q", backend)
+			return fmt.Errorf("registration: unknown backend %q", backend)
 		}
 		config.backend = backend
 		config.backendSet = true
+		return nil
+	}
+}
+
+// WithDevice uses an existing Vulkan device without taking ownership. It
+// cannot be combined with WithBackend and may be supplied at most once.
+func WithDevice(device *vulki.Device) Option {
+	return func(config *correlatorConfig) error {
+		if config.backendSet {
+			return fmt.Errorf("registration: backend and device options cannot be combined")
+		}
+		if config.deviceSet {
+			return fmt.Errorf("registration: device option is already set")
+		}
+		if device == nil || device.Closed() {
+			return fmt.Errorf("registration: borrowed device is closed")
+		}
+		config.device = device
+		config.deviceSet = true
 		return nil
 	}
 }
@@ -51,42 +75,45 @@ func NewCorrelator(maxW, maxH int, options ...Option) (*Correlator, error) {
 	config := correlatorConfig{backend: BackendAuto}
 	for index, option := range options {
 		if option == nil {
-			return nil, fmt.Errorf("imgproc: option %d is nil", index)
+			return nil, fmt.Errorf("registration: option %d is nil", index)
 		}
 		if err := option(&config); err != nil {
-			return nil, fmt.Errorf("imgproc: option %d: %w", index, err)
+			return nil, fmt.Errorf("registration: option %d: %w", index, err)
 		}
 	}
 
+	if config.deviceSet {
+		return newVulkanCorrelator(config.device, maxW, maxH)
+	}
 	switch config.backend {
 	case BackendAuto:
-		return newAutoCorrelator(maxW, maxH, compute.NewContext)
+		return newAutoCorrelator(maxW, maxH, vulki.Open)
 	case BackendVulkan:
 		return newOwnedVulkanCorrelator(maxW, maxH)
 	case BackendCPU:
 		return newCPUCorrelator(maxW, maxH)
 	default:
-		return nil, fmt.Errorf("imgproc: unknown backend %q", config.backend)
+		return nil, fmt.Errorf("registration: unknown backend %q", config.backend)
 	}
 }
 
 func newAutoCorrelator(
 	maxW, maxH int,
-	newContext func() (*compute.Context, error),
+	openDevice func() (*vulki.Device, error),
 ) (*Correlator, error) {
 	cpu, err := newCPUCorrelator(maxW, maxH)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, gpuErr := newContext()
+	device, gpuErr := openDevice()
 	if gpuErr == nil {
-		gpu, err := newVulkanCorrelator(ctx, maxW, maxH)
+		gpu, err := newVulkanCorrelator(device, maxW, maxH)
 		if err == nil {
-			gpu.ownsContext = true
+			gpu.ownsDevice = true
 			return gpu, nil
 		}
-		ctx.Close()
+		_ = device.Close()
 		gpuErr = err
 	}
 
@@ -95,16 +122,16 @@ func newAutoCorrelator(
 }
 
 func newOwnedVulkanCorrelator(maxW, maxH int) (*Correlator, error) {
-	ctx, err := compute.NewContext()
+	device, err := vulki.Open()
 	if err != nil {
 		return nil, err
 	}
-	c, err := newVulkanCorrelator(ctx, maxW, maxH)
+	c, err := newVulkanCorrelator(device, maxW, maxH)
 	if err != nil {
-		ctx.Close()
+		_ = device.Close()
 		return nil, err
 	}
-	c.ownsContext = true
+	c.ownsDevice = true
 	return c, nil
 }
 

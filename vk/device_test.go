@@ -171,6 +171,12 @@ func TestCmdUpdateBufferValidation(t *testing.T) {
 
 	valid := make([]uint32, 1)
 	validBytes := unsafe.Slice((*byte)(unsafe.Pointer(&valid[0])), 4)
+	unalignedStorage := make([]byte, 5)
+	unalignedOffset := 0
+	if uintptr(unsafe.Pointer(&unalignedStorage[0]))%4 == 0 {
+		unalignedOffset = 1
+	}
+	unalignedBytes := unalignedStorage[unalignedOffset : unalignedOffset+4]
 	tests := []struct {
 		name   string
 		cb     CommandBuffer
@@ -183,7 +189,7 @@ func TestCmdUpdateBufferValidation(t *testing.T) {
 		{name: "unaligned offset", cb: CommandBuffer(1), dst: Buffer(1), offset: 2, data: validBytes},
 		{name: "unaligned size", cb: CommandBuffer(1), dst: Buffer(1), data: validBytes[:3]},
 		{name: "oversized", cb: CommandBuffer(1), dst: Buffer(1), data: make([]byte, 65540)},
-		{name: "unaligned address", cb: CommandBuffer(1), dst: Buffer(1), data: make([]byte, 5)[1:]},
+		{name: "unaligned address", cb: CommandBuffer(1), dst: Buffer(1), data: unalignedBytes},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
