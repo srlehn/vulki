@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+
+	"github.com/gogpu/naga"
 )
 
 const testWGSL = `
@@ -22,12 +24,28 @@ func TestCompileDefaultsToSPIRV13(t *testing.T) {
 }
 
 func TestCompileOptions(t *testing.T) {
-	module, err := Compile(testWGSL, WithSPIRVVersion(SPIRV1_0), WithDebugInfo())
+	module, err := Compile(testWGSL, WithSPIRVVersion(SPIRV1_0), WithDebugInfo)
 	if err != nil {
 		t.Fatalf("Compile with options: %v", err)
 	}
 	if got, want := spirvVersionWord(t, module), uint32(0x00010000); got != want {
 		t.Fatalf("SPIR-V version word = %#08x, want %#08x", got, want)
+	}
+}
+
+func TestCompileBooleanOptions(t *testing.T) {
+	config := compileConfig{naga: naga.DefaultOptions()}
+	if err := WithDebugInfo(&config); err != nil {
+		t.Fatalf("WithDebugInfo: %v", err)
+	}
+	if err := WithoutValidation(&config); err != nil {
+		t.Fatalf("WithoutValidation: %v", err)
+	}
+	if !config.naga.Debug {
+		t.Fatal("WithDebugInfo did not enable debug information")
+	}
+	if config.naga.Validate {
+		t.Fatal("WithoutValidation did not disable validation")
 	}
 }
 

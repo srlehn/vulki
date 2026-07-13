@@ -20,15 +20,7 @@ const (
 
 // Option configures NewCorrelator. Options are applied before any CPU or
 // Vulkan resources are allocated.
-type Option interface {
-	apply(*correlatorConfig) error
-}
-
-type optionFunc func(*correlatorConfig) error
-
-func (option optionFunc) apply(config *correlatorConfig) error {
-	return option(config)
-}
+type Option func(*correlatorConfig) error
 
 type correlatorConfig struct {
 	backend    Backend
@@ -38,7 +30,7 @@ type correlatorConfig struct {
 // WithBackend selects automatic fallback, direct Vulkan, or CPU execution.
 // It may be supplied at most once.
 func WithBackend(backend Backend) Option {
-	return optionFunc(func(config *correlatorConfig) error {
+	return func(config *correlatorConfig) error {
 		if config.backendSet {
 			return fmt.Errorf("imgproc: backend option is already set")
 		}
@@ -50,7 +42,7 @@ func WithBackend(backend Backend) Option {
 		config.backend = backend
 		config.backendSet = true
 		return nil
-	})
+	}
 }
 
 // NewCorrelator creates a correlator. With no options it prefers direct Vulkan
@@ -61,7 +53,7 @@ func NewCorrelator(maxW, maxH int, options ...Option) (*Correlator, error) {
 		if option == nil {
 			return nil, fmt.Errorf("imgproc: option %d is nil", index)
 		}
-		if err := option.apply(&config); err != nil {
+		if err := option(&config); err != nil {
 			return nil, fmt.Errorf("imgproc: option %d: %w", index, err)
 		}
 	}

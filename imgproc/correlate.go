@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/draw"
 	"math"
+	"reflect"
 
 	"github.com/srlehn/vulki/compute"
 	"github.com/srlehn/vulki/shader"
@@ -521,6 +523,38 @@ func packRGBA(img *image.RGBA) ([]uint32, error) {
 	return pixels, nil
 }
 
+func asRGBA(img image.Image) (*image.RGBA, error) {
+	switch img := img.(type) {
+	case nil:
+		return nil, fmt.Errorf("imgproc: nil image")
+	case *image.RGBA:
+		if img == nil {
+			return nil, fmt.Errorf("imgproc: nil RGBA image")
+		}
+		return img, nil
+	default:
+		bounds := img.Bounds()
+		converted := image.NewRGBA(bounds)
+		draw.Draw(converted, bounds, img, bounds.Min, draw.Src)
+		return converted, nil
+	}
+}
+
+func imageBounds(img image.Image) (image.Rectangle, error) {
+	if img == nil {
+		return image.Rectangle{}, fmt.Errorf("imgproc: nil image")
+	}
+	value := reflect.ValueOf(img)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return image.Rectangle{}, fmt.Errorf("imgproc: nil image")
+		}
+	}
+	return img.Bounds(), nil
+}
+
 // PhaseCorrelate recovers rotation, scale, and translation between two images.
 // Following Reddy & Chatterji (1996):
 //
@@ -528,23 +562,24 @@ func packRGBA(img *image.RGBA) ([]uint32, error) {
 //	Phase 2: transform image A by detected angle/scale, phase correlate with B for translation
 //	         Try both angle and angle+180° (magnitude spectrum has 180° symmetry), pick higher peak.
 //
-// Stages packed RGBA pixels once per image, then submits both uploads, the
-// entire GPU pipeline, and a 64-byte result readback as one queue operation.
-func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
+// RGBA inputs are used directly. Other image implementations are converted to
+// RGBA before processing. The Vulkan path stages packed pixels once per image,
+// then submits both uploads, the entire GPU pipeline, and a 64-byte result
+// readback as one queue operation.
+func (c *Correlator) PhaseCorrelate(imgA, imgB image.Image) (*Result, error) {
 	if c == nil || c.closed {
 		return nil, fmt.Errorf("imgproc: invalid correlator")
 	}
-	if c.backend == BackendCPU {
-		return c.phaseCorrelateCPU(imgA, imgB)
+	boundsA, err := imageBounds(imgA)
+	if err != nil {
+		return nil, fmt.Errorf("imgproc: image A: %w", err)
 	}
-	if c.backend != BackendVulkan || c.ctx == nil {
-		return nil, fmt.Errorf("imgproc: invalid correlator backend")
+	boundsB, err := imageBounds(imgB)
+	if err != nil {
+		return nil, fmt.Errorf("imgproc: image B: %w", err)
 	}
-	if imgA == nil || imgB == nil {
-		return nil, fmt.Errorf("imgproc: input images must not be nil")
-	}
-	wA, hA := imgA.Bounds().Dx(), imgA.Bounds().Dy()
-	wB, hB := imgB.Bounds().Dx(), imgB.Bounds().Dy()
+	wA, hA := boundsA.Dx(), boundsA.Dy()
+	wB, hB := boundsB.Dx(), boundsB.Dy()
 	if wA != wB || hA != hB {
 		return nil, fmt.Errorf("imgproc: input images must have equal dimensions, got %dx%d and %dx%d", wA, hA, wB, hB)
 	}
@@ -554,11 +589,25 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB *image.RGBA) (*Result, error) {
 	if wA > c.maxW || hA > c.maxH {
 		return nil, fmt.Errorf("imgproc: input dimensions %dx%d exceed correlator maximum %dx%d", wA, hA, c.maxW, c.maxH)
 	}
-	pixelsA, err := packRGBA(imgA)
+	rgbaA, err := asRGBA(imgA)
 	if err != nil {
 		return nil, fmt.Errorf("imgproc: image A: %w", err)
 	}
-	pixelsB, err := packRGBA(imgB)
+	rgbaB, err := asRGBA(imgB)
+	if err != nil {
+		return nil, fmt.Errorf("imgproc: image B: %w", err)
+	}
+	if c.backend == BackendCPU {
+		return c.phaseCorrelateCPU(rgbaA, rgbaB)
+	}
+	if c.backend != BackendVulkan || c.ctx == nil {
+		return nil, fmt.Errorf("imgproc: invalid correlator backend")
+	}
+	pixelsA, err := packRGBA(rgbaA)
+	if err != nil {
+		return nil, fmt.Errorf("imgproc: image A: %w", err)
+	}
+	pixelsB, err := packRGBA(rgbaB)
 	if err != nil {
 		return nil, fmt.Errorf("imgproc: image B: %w", err)
 	}

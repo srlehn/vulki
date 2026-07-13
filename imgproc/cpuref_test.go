@@ -39,6 +39,44 @@ func TestPhaseCorrelateCPU_RejectsBlankImages(t *testing.T) {
 	}
 }
 
+func TestPhaseCorrelateCPU_ConvertsNonRGBAImages(t *testing.T) {
+	const size = 64
+	corr, err := NewCorrelator(size, size, WithBackend(BackendCPU))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer corr.Close()
+
+	blank := image.NewNRGBA(image.Rect(0, 0, size, size))
+	if _, err := corr.PhaseCorrelate(blank, blank); !errors.Is(err, ErrLowConfidence) {
+		t.Fatalf("blank NRGBA error = %v, want ErrLowConfidence", err)
+	}
+}
+
+func TestAsRGBAReusesRGBA(t *testing.T) {
+	img := image.NewRGBA(image.Rect(3, 5, 11, 13))
+	converted, err := asRGBA(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if converted != img {
+		t.Fatal("asRGBA copied an RGBA image")
+	}
+}
+
+func TestPhaseCorrelateRejectsTypedNilImage(t *testing.T) {
+	corr, err := NewCorrelator(64, 64, WithBackend(BackendCPU))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer corr.Close()
+
+	var img *image.RGBA
+	if _, err := corr.PhaseCorrelate(img, img); err == nil {
+		t.Fatal("typed nil images were accepted")
+	}
+}
+
 func TestAutoCorrelatorFallsBackToCPU(t *testing.T) {
 	gpuErr := errors.New("test Vulkan failure")
 	corr, err := newAutoCorrelator(64, 64, func() (*compute.Context, error) {

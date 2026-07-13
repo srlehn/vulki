@@ -65,9 +65,23 @@ func WithSPIRVVersion(version SPIRVVersion) Option {
 
 // WithDebugInfo includes source names and line information in the generated
 // SPIR-V module.
-func WithDebugInfo() Option {
+var WithDebugInfo = withDebugInfo()
+
+// WithoutValidation disables intermediate-representation validation before
+// SPIR-V generation. Validation is enabled by default and should normally
+// remain enabled.
+var WithoutValidation = withoutValidation()
+
+func withDebugInfo() Option {
 	return func(config *compileConfig) error {
 		config.naga.Debug = true
+		return nil
+	}
+}
+
+func withoutValidation() Option {
+	return func(config *compileConfig) error {
+		config.naga.Validate = false
 		return nil
 	}
 }
