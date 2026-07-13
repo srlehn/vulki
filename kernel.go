@@ -67,15 +67,16 @@ func BindBuffer(binding uint32, buffer *Buffer) BufferBinding {
 
 // BindingSet is a concrete set of buffers bound to one Kernel.
 type BindingSet struct {
-	mu      sync.Mutex
-	device  *Device
-	kernel  *Kernel
-	childID uint64
-	pool    vk.DescriptorPool
-	set     vk.DescriptorSet
-	buffers []*Buffer
-	handles []vk.Buffer
-	closed  bool
+	mu        sync.Mutex
+	device    *Device
+	kernel    *Kernel
+	childID   uint64
+	pool      vk.DescriptorPool
+	set       vk.DescriptorSet
+	buffers   []*Buffer
+	handles   []vk.Buffer
+	recorders int
+	closed    bool
 }
 
 type kernelOps struct {
@@ -291,7 +292,7 @@ func (k *Kernel) NewBindings(bindings ...BufferBinding) (*BindingSet, error) {
 			set.releaseReferences()
 			return nil, fmt.Errorf("vulki: binding %d uses a closed buffer", binding.binding)
 		}
-		buffer.bindings++
+		buffer.references++
 		handle := buffer.buffer
 		size := buffer.size
 		buffer.mu.Unlock()
@@ -452,6 +453,9 @@ func (set *BindingSet) close(fromDevice bool) error {
 	if set.closed {
 		return nil
 	}
+	if set.recorders > 0 {
+		return fmt.Errorf("vulki: binding set is used by %d recorders", set.recorders)
+	}
 	var state *deviceState
 	if fromDevice {
 		set.device.mu.Lock()
@@ -488,8 +492,8 @@ func (set *BindingSet) closeNative(state *deviceState) {
 func (set *BindingSet) releaseReferences() {
 	for _, buffer := range set.buffers {
 		buffer.mu.Lock()
-		if buffer.bindings > 0 {
-			buffer.bindings--
+		if buffer.references > 0 {
+			buffer.references--
 		}
 		buffer.mu.Unlock()
 	}
@@ -567,4 +571,18 @@ func (k *Kernel) closeNative(state *deviceState) {
 		state.kernelOps.destroyShaderModule(state.deviceFns, state.device, k.shaderModule)
 		k.shaderModule = 0
 	}
+}
+
+func (d *Device) validateWorkgroups(groups Workgroups) error {
+	if groups.X == 0 || groups.Y == 0 || groups.Z == 0 {
+		return fmt.Errorf("vulki: workgroup counts must be greater than zero")
+	}
+	limits := d.Info().Limits.MaxComputeWorkGroupCount
+	counts := [3]uint32{groups.X, groups.Y, groups.Z}
+	for index, count := range counts {
+		if limits[index] != 0 && count > limits[index] {
+			return fmt.Errorf("vulki: workgroup count %d exceeds dimension %d limit %d", count, index, limits[index])
+		}
+	}
+	return nil
 }

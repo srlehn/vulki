@@ -201,8 +201,8 @@ func TestNewBindingsCleansPoolAndReferences(t *testing.T) {
 			if bindings != nil {
 				t.Fatalf("bindings = %#v, want nil", bindings)
 			}
-			if kernel.bindingSets != 0 || buffer.bindings != 0 {
-				t.Fatalf("references after failure: kernel=%d buffer=%d", kernel.bindingSets, buffer.bindings)
+			if kernel.bindingSets != 0 || buffer.references != 0 {
+				t.Fatalf("references after failure: kernel=%d buffer=%d", kernel.bindingSets, buffer.references)
 			}
 			if failure == "sets" {
 				want := []string{"pool:5"}

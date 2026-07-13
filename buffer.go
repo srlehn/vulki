@@ -18,7 +18,7 @@ type Buffer struct {
 	memory        vk.DeviceMemory
 	stagingBuffer vk.Buffer
 	stagingMemory vk.DeviceMemory
-	bindings      int
+	references    int
 	closed        bool
 }
 
@@ -42,6 +42,7 @@ type deviceOps struct {
 	destroyFence             func(*vk.DeviceFuncs, vk.Device, vk.Fence)
 	queueSubmit              func(*vk.DeviceFuncs, vk.Queue, []vk.SubmitInfo, vk.Fence) error
 	waitForFences            func(*vk.DeviceFuncs, vk.Device, []vk.Fence, bool, uint64) error
+	updateBuffer             func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, uint64, []byte) error
 }
 
 var directDeviceOps = deviceOps{
@@ -101,6 +102,9 @@ var directDeviceOps = deviceOps{
 	},
 	waitForFences: func(functions *vk.DeviceFuncs, device vk.Device, fences []vk.Fence, waitAll bool, timeout uint64) error {
 		return functions.WaitForFences(device, fences, waitAll, timeout)
+	},
+	updateBuffer: func(functions *vk.DeviceFuncs, command vk.CommandBuffer, buffer vk.Buffer, offset uint64, data []byte) error {
+		return functions.CmdUpdateBuffer(command, buffer, offset, data)
 	},
 }
 
@@ -325,8 +329,8 @@ func (b *Buffer) Close() error {
 	if b.closed {
 		return nil
 	}
-	if b.bindings > 0 {
-		return fmt.Errorf("vulki: buffer is used by %d binding sets", b.bindings)
+	if b.references > 0 {
+		return fmt.Errorf("vulki: buffer is referenced by %d live resources", b.references)
 	}
 	if b.device == nil && b.buffer == 0 && b.memory == 0 {
 		b.closed = true
