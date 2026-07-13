@@ -1,19 +1,19 @@
 # vulki
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/srlehn/vulki/compute.svg)](https://pkg.go.dev/github.com/srlehn/vulki/compute)
+[![Go Reference](https://pkg.go.dev/badge/github.com/srlehn/vulki.svg)](https://pkg.go.dev/github.com/srlehn/vulki)
 [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![experimental](https://img.shields.io/badge/status-experimental-orange.svg)
 
-Pure-Go Vulkan compute utilities, WGSL shader compilation, and experimental
-GPU image registration.
+Vulki is a cgo-free compute library with a small owner-bound Go API, direct
+Vulkan execution, WGSL shader compilation, and experimental image registration.
 
 Vulki loads Vulkan through
 [`purego`](https://github.com/ebitengine/purego), compiles WGSL to SPIR-V with
 [`gogpu/naga`](https://github.com/gogpu/naga), and does not require cgo.
 
-This module is **experimental**. APIs may change. The generic compute path is
-usable for development, while the full-GPU image-registration path is still
-being validated and debugged.
+This module is **experimental**. APIs may change. The root compute package is
+usable for development, while image-registration accuracy and portability are
+still being validated.
 
 When you find any errors please report them as issues.
 
@@ -39,7 +39,7 @@ is not currently supported even when MoltenVK is installed.
 Add a package to a Go module:
 
 ```sh
-go get github.com/srlehn/vulki/compute
+go get github.com/srlehn/vulki
 ```
 
 Install the example commands:
@@ -51,40 +51,57 @@ go install github.com/srlehn/vulki/cmd/correlate@latest
 
 ## Packages
 
-- `compute` manages a Vulkan instance, compute device, buffers, descriptor
-  bindings, pipelines, command recording, uploads, and readback.
+- The root `vulki` package provides owner-bound devices, buffers, reusable WGSL
+  kernels, binding sets, synchronous dispatch, and command recording without
+  exposing Vulkan handles.
 - `shader` compiles WGSL source to SPIR-V.
 - `vk` contains the low-level Vulkan types, constants, loader, and function
-  wrappers used by `compute`.
+  wrappers used by the direct implementation.
 - `imgproc` contains an experimental FFT-based phase-correlation pipeline for
   estimating rotation, scale, and translation between images.
+- `compute` is the lower-level Vulkan-backed resource layer retained while
+  `imgproc` is migrated to the root API. New general compute code should use
+  the root package.
 
 The smallest complete compute example is in
 [`cmd/demo`](cmd/demo). Its core setup looks like this:
 
 ```go
-ctx, err := compute.NewContext()
+device, err := vulki.Open()
 if err != nil {
     return err
 }
-defer ctx.Close()
+defer device.Close()
 
-spirv, err := shader.Compile(wgslSource, nil)
+input, err := device.NewBuffer(size)
 if err != nil {
     return err
 }
+defer input.Close()
 
-input, err := ctx.CreateBuffer(size, vk.BufferUsageStorageBufferBit)
+output, err := device.NewBuffer(size)
 if err != nil {
     return err
 }
-defer input.Destroy(ctx)
+defer output.Close()
+
+kernel, err := device.NewKernel(vulki.KernelOptions{
+    WGSL: wgslSource,
+    Bindings: []vulki.BindingLayout{
+        {Binding: 0, Access: vulki.BufferReadOnly},
+        {Binding: 1, Access: vulki.BufferReadWrite},
+    },
+})
+if err != nil {
+    return err
+}
+defer kernel.Close()
 ```
 
-Buffers use device-local memory and host-visible staging memory. Create a
-pipeline with `Context.CreateComputePipeline`, dispatch it with
-`Context.Dispatch` or a `CommandRecorder`, and download the result from the
-output buffer.
+Bind concrete buffers with `Kernel.NewBindings`, upload raw bytes through the
+buffer, and call `Device.DispatchAndWait`. Use a `Recorder` to batch aligned
+inline updates, explicit compute barriers, and multiple dispatches into one
+blocking queue submission. The complete checked example is in `cmd/demo`.
 
 ## Commands
 
@@ -101,7 +118,7 @@ Estimate the transform between two PNG images:
 go run ./cmd/correlate image-a.png image-b.png
 ```
 
-The command uses `-backend auto` by default. Use `-backend gpu` to require
+The command uses `-backend auto` by default. Use `-backend vulkan` to require
 Vulkan or `-backend cpu` to bypass Vulkan explicitly:
 
 ```sh
@@ -126,10 +143,13 @@ go run ./cmd/correlate -save image.png
 The registration command is a research tool. Its reported transform should be
 checked against known inputs before relying on it.
 
-Library users can obtain the same GPU-first behavior with
-`imgproc.NewAutoCorrelator`. `NewGPUCorrelator` and `NewCPUCorrelator` select a
-backend explicitly. `Correlator.Backend` reports the backend actually in use,
-and `FallbackReason` explains an automatic CPU selection.
+Library users get the same GPU-first behavior from
+`imgproc.NewCorrelator(maxW, maxH)`. Pass
+`imgproc.WithBackend(imgproc.BackendVulkan)` or
+`imgproc.WithBackend(imgproc.BackendCPU)` to require a backend.
+`Correlator.Backend` reports the implementation actually in use, and
+`FallbackReason` explains an automatic CPU selection. `PhaseCorrelate` accepts
+any `image.Image` implementation and converts non-RGBA inputs internally.
 
 ## Development
 

@@ -7,9 +7,7 @@ import (
 	"math"
 	"os"
 
-	"github.com/srlehn/vulki/compute"
-	"github.com/srlehn/vulki/shader"
-	"github.com/srlehn/vulki/vk"
+	"github.com/srlehn/vulki"
 )
 
 //go:embed double.wgsl
@@ -23,25 +21,16 @@ func main() {
 }
 
 func run() error {
-	// 1. Compile WGSL → SPIR-V.
-	fmt.Println("Compiling WGSL shader...")
-	spirv, err := shader.Compile(wgslSource)
+	fmt.Println("Opening compute device...")
+	device, err := vulki.Open()
 	if err != nil {
-		return fmt.Errorf("shader compile: %w", err)
+		return fmt.Errorf("open device: %w", err)
 	}
-	fmt.Printf("SPIR-V: %d bytes\n", len(spirv))
+	defer device.Close()
+	fmt.Printf("Adapter: %s (%s)\n", device.Info().AdapterName, device.Info().Implementation)
 
-	// 2. Create Vulkan compute context.
-	fmt.Println("Creating Vulkan compute context...")
-	ctx, err := compute.NewContext()
-	if err != nil {
-		return fmt.Errorf("context: %w", err)
-	}
-	defer ctx.Close()
-
-	// 3. Prepare input data.
 	const numElements = 256
-	const elementSize = 4 // float32
+	const elementSize = 4
 	const bufSize = numElements * elementSize
 
 	inputData := make([]byte, bufSize)
@@ -49,47 +38,53 @@ func run() error {
 		binary.LittleEndian.PutUint32(inputData[i*elementSize:], math.Float32bits(float32(i)))
 	}
 
-	// 4. Create input/output buffers.
-	inputBuf, err := ctx.CreateBuffer(bufSize, vk.BufferUsageStorageBufferBit)
+	inputBuf, err := device.NewBuffer(bufSize)
 	if err != nil {
 		return fmt.Errorf("create input buffer: %w", err)
 	}
-	defer inputBuf.Destroy(ctx)
+	defer inputBuf.Close()
 
-	outputBuf, err := ctx.CreateBuffer(bufSize, vk.BufferUsageStorageBufferBit)
+	outputBuf, err := device.NewBuffer(bufSize)
 	if err != nil {
 		return fmt.Errorf("create output buffer: %w", err)
 	}
-	defer outputBuf.Destroy(ctx)
+	defer outputBuf.Close()
 
-	// 5. Upload input data.
-	if err := inputBuf.Upload(ctx, inputData); err != nil {
+	if err := inputBuf.Upload(inputData); err != nil {
 		return fmt.Errorf("upload: %w", err)
 	}
 
-	// 6. Create compute pipeline.
-	pipeline, err := ctx.CreateComputePipeline(spirv, []compute.BufferBinding{
-		{Binding: 0, Buffer: inputBuf},
-		{Binding: 1, Buffer: outputBuf},
+	kernel, err := device.NewKernel(vulki.KernelOptions{
+		WGSL: wgslSource,
+		Bindings: []vulki.BindingLayout{
+			{Binding: 0, Access: vulki.BufferReadOnly},
+			{Binding: 1, Access: vulki.BufferReadWrite},
+		},
 	})
 	if err != nil {
-		return fmt.Errorf("create pipeline: %w", err)
+		return fmt.Errorf("create kernel: %w", err)
 	}
-	defer pipeline.Destroy(ctx)
+	defer kernel.Close()
 
-	// 7. Dispatch compute shader.
+	bindings, err := kernel.NewBindings(
+		vulki.BindBuffer(0, inputBuf),
+		vulki.BindBuffer(1, outputBuf),
+	)
+	if err != nil {
+		return fmt.Errorf("create bindings: %w", err)
+	}
+	defer bindings.Close()
+
 	fmt.Println("Dispatching compute shader...")
-	if err := ctx.Dispatch(pipeline, numElements/64, 1, 1); err != nil {
+	if err := device.DispatchAndWait(kernel, bindings, vulki.Workgroups{X: numElements / 64, Y: 1, Z: 1}); err != nil {
 		return fmt.Errorf("dispatch: %w", err)
 	}
 
-	// 8. Read back results.
-	result, err := outputBuf.Download(ctx, bufSize)
-	if err != nil {
+	result := make([]byte, bufSize)
+	if err := outputBuf.Download(result); err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
 
-	// 9. Print results.
 	fmt.Println("\nResults (first 16 elements):")
 	fmt.Printf("%-10s %-10s %-10s\n", "Index", "Input", "Output")
 	for i := 0; i < 16; i++ {
@@ -98,7 +93,6 @@ func run() error {
 		fmt.Printf("%-10d %-10.1f %-10.1f\n", i, in, out)
 	}
 
-	// Verify all results.
 	errors := 0
 	for i := 0; i < numElements; i++ {
 		in := math.Float32frombits(binary.LittleEndian.Uint32(inputData[i*elementSize:]))
