@@ -1096,6 +1096,12 @@ func TestPipeline_DumpIntermediates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for index, value := range fftData {
+		if math.IsNaN(float64(value[0])) || math.IsInf(float64(value[0]), 0) ||
+			math.IsNaN(float64(value[1])) || math.IsInf(float64(value[1]), 0) {
+			t.Fatalf("FFT output %d is not finite: %v", index, value)
+		}
+	}
 	t.Log("=== FFT output (first row) ===")
 	for x := 0; x < w; x++ {
 		t.Logf("  FFT[%d,0] = (%v, %v)", x, fftData[x][0], fftData[x][1])
@@ -1118,6 +1124,11 @@ func TestPipeline_DumpIntermediates(t *testing.T) {
 	magData, err := magBuf.DownloadSlice(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for index, value := range magData {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) || value < 0 {
+			t.Fatalf("magnitude output %d is invalid: %v", index, value)
+		}
 	}
 	t.Log("=== Magnitude (all) ===")
 	for y := 0; y < h; y++ {
@@ -1153,6 +1164,12 @@ func TestPipeline_DumpIntermediates(t *testing.T) {
 	lpData, err := logPolBuf.DownloadSlice(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for index, value := range lpData {
+		if math.IsNaN(float64(value[0])) || math.IsInf(float64(value[0]), 0) ||
+			math.IsNaN(float64(value[1])) || math.IsInf(float64(value[1]), 0) {
+			t.Fatalf("log-polar output %d is not finite: %v", index, value)
+		}
 	}
 	t.Log("=== Log-polar output ===")
 	for y := 0; y < h; y++ {
