@@ -51,14 +51,21 @@ var fftshiftWGSL string
 //go:embed shaders/crosspower.wgsl
 var crosspowerWGSL string
 
-// Result holds the recovered rotation, scale, and translation.
+// Result describes the transform that maps image A to image B. Apply Scale and
+// the counterclockwise Angle around the image center, then apply Tx and Ty.
 type Result struct {
-	Angle                 float64 // degrees
-	Scale                 float64 // multiplier
-	Tx                    float64 // translation in pixels (x)
-	Ty                    float64 // translation in pixels (y)
-	RotationConfidence    float64 // normalized log-polar IFFT peak
-	TranslationConfidence float64 // normalized translation IFFT peak
+	// Angle is counterclockwise rotation in degrees, normalized to [-180, 180).
+	Angle float64
+	// Scale is the image-size multiplier and is greater than zero.
+	Scale float64
+	// Tx is horizontal translation in pixels; positive values move right.
+	Tx float64
+	// Ty is vertical translation in pixels; positive values move down.
+	Ty float64
+	// RotationConfidence is the normalized log-polar correlation peak.
+	RotationConfidence float64
+	// TranslationConfidence is the normalized translation correlation peak.
+	TranslationConfidence float64
 }
 
 // ErrLowConfidence indicates that at least one phase-correlation peak did not
@@ -555,7 +562,7 @@ func imageBounds(img image.Image) (image.Rectangle, error) {
 	return img.Bounds(), nil
 }
 
-// PhaseCorrelate recovers rotation, scale, and translation between two images.
+// PhaseCorrelate recovers the transform that maps image A to image B.
 // Following Reddy & Chatterji (1996):
 //
 //	Phase 1: FFT → magnitude → highpass → log-polar → FFT → cross-power → IFFT → peak → angle/scale
@@ -566,6 +573,17 @@ func imageBounds(img image.Image) (image.Rectangle, error) {
 // RGBA before processing. The Vulkan path stages packed pixels once per image,
 // then submits both uploads, the entire GPU pipeline, and a 64-byte result
 // readback as one queue operation.
+//
+// Inputs must have equal dimensions, both dimensions must be at least two, and
+// neither dimension may exceed the maximum passed to NewCorrelator. Processing
+// uses a centered square crop based on the smaller dimension and pads it to the
+// next power of two. Source images are not mutated.
+//
+// Angle is counterclockwise in displayed image coordinates. Scale and rotation
+// are applied around the image center before translation; positive Tx moves
+// right and positive Ty moves down. Confidence values are normalized
+// correlation peaks. A peak at or below 0.03 returns a nil Result and an error
+// wrapping ErrLowConfidence.
 func (c *Correlator) PhaseCorrelate(imgA, imgB image.Image) (*Result, error) {
 	if c == nil || c.closed {
 		return nil, fmt.Errorf("imgproc: invalid correlator")
@@ -896,7 +914,7 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB image.Image) (*Result, error) {
 	}
 
 	return &Result{
-		Angle:                 bestAngle,
+		Angle:                 normalizeAngle(bestAngle),
 		Scale:                 scale,
 		Tx:                    bestTx,
 		Ty:                    bestTy,
@@ -905,7 +923,8 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB image.Image) (*Result, error) {
 	}, nil
 }
 
-// Close releases all GPU resources.
+// Close releases resources owned by the Correlator. It is safe to call with a
+// nil receiver or more than once.
 func (c *Correlator) Close() {
 	if c == nil || c.closed {
 		return

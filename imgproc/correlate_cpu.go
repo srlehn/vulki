@@ -77,7 +77,7 @@ func (c *Correlator) phaseCorrelateCPU(imgA, imgB *image.RGBA) (*Result, error) 
 		confidence float64
 	}
 	tryTranslation := func(angle float64) (translationResult, error) {
-		warped := BilinearWarp(imgA, -angle, scale)
+		warped := bilinearWarp(imgA, -angle, scale)
 		warpedPixels, err := packRGBA(warped)
 		if err != nil {
 			return translationResult{}, err
@@ -121,7 +121,7 @@ func (c *Correlator) phaseCorrelateCPU(imgA, imgB *image.RGBA) (*Result, error) 
 	}
 
 	return &Result{
-		Angle:                 best.angle,
+		Angle:                 normalizeAngle(best.angle),
 		Scale:                 scale,
 		Tx:                    best.tx,
 		Ty:                    best.ty,

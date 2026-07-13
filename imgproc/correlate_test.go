@@ -803,7 +803,7 @@ func TestPhase1_RotationDetection(t *testing.T) {
 	ctx := testContext(t)
 
 	imgA := loadTestImage(t, "../testdata/snake.png")
-	imgB := BilinearWarp(imgA, -12, 1)
+	imgB := bilinearWarp(imgA, -12, 1)
 	if fixture := os.Getenv("VULKI_ROTATION_FIXTURE"); fixture != "" {
 		imgB = loadTestImage(t, fixture)
 	}
@@ -870,7 +870,7 @@ func assertKnownTransform(t *testing.T, corr *Correlator, imgA *image.RGBA) {
 		wantTx    = 15
 		wantTy    = -20
 	)
-	imgB := translateImageForTest(BilinearWarp(imgA, -wantAngle, wantScale), wantTx, wantTy)
+	imgB := translateImageForTest(bilinearWarp(imgA, -wantAngle, wantScale), wantTx, wantTy)
 
 	result, err := corr.PhaseCorrelate(imgA, imgB)
 	if err != nil {

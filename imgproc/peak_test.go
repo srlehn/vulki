@@ -30,6 +30,29 @@ func TestLog2i(t *testing.T) {
 	}
 }
 
+func TestNormalizeAngle(t *testing.T) {
+	tests := []struct {
+		input float64
+		want  float64
+	}{
+		{input: -540, want: -180},
+		{input: -181, want: 179},
+		{input: -180, want: -180},
+		{input: -12, want: -12},
+		{input: 0, want: 0},
+		{input: 12, want: 12},
+		{input: 179, want: 179},
+		{input: 180, want: -180},
+		{input: 181, want: -179},
+		{input: 540, want: -180},
+	}
+	for _, test := range tests {
+		if got := normalizeAngle(test.input); got != test.want {
+			t.Errorf("normalizeAngle(%v) = %v, want %v", test.input, got, test.want)
+		}
+	}
+}
+
 func TestNormalizeComplex(t *testing.T) {
 	data := [][2]float32{{4, 8}, {2, 6}, {10, 0}}
 	normalizeComplex(data, 2)
@@ -188,7 +211,7 @@ func TestBilinearWarpPreservesNonZeroBounds(t *testing.T) {
 		}
 	}
 	sub := parent.SubImage(image.Rect(1, 1, 4, 4)).(*image.RGBA)
-	warped := BilinearWarp(sub, 0, 1)
+	warped := bilinearWarp(sub, 0, 1)
 	if warped.Bounds() != sub.Bounds() {
 		t.Fatalf("warped bounds = %v, want %v", warped.Bounds(), sub.Bounds())
 	}
