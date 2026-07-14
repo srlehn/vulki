@@ -263,12 +263,20 @@ func TestRecorderAbortReleasesTransferAndBuffer(t *testing.T) {
 	if err := recorder.Abort(); err != nil {
 		t.Fatalf("Abort: %v", err)
 	}
+	if got := len(device.idleTransfers); got != 1 {
+		t.Fatalf("idle transfers after Abort = %d, want 1", got)
+	}
 	if err := buffer.Close(); err != nil {
 		t.Fatalf("buffer Close after Abort: %v", err)
 	}
-	want := []string{"destroy-buffer:2", "free-memory:2", "destroy-buffer:1", "free-memory:1"}
+	want := []string{"destroy-buffer:1", "free-memory:1"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("cleanup = %v, want %v", *events, want)
+	}
+	device.drainTransferPool(device.state)
+	want = append(want, "destroy-buffer:2", "free-memory:2")
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("cleanup after pool drain = %v, want %v", *events, want)
 	}
 }
 
@@ -289,6 +297,243 @@ func TestRecorderUploadCleansMapFailure(t *testing.T) {
 	want := []string{"destroy-buffer:2", "free-memory:2"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("cleanup = %v, want %v", *events, want)
+	}
+}
+
+func TestRecorderMultipleUploadsHoldExclusiveTransferLeases(t *testing.T) {
+	device, _, _ := fakeBufferDevice("")
+	buffer, err := device.NewBuffer(16)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+	mapped := make([]byte, 16)
+	device.state.ops.mapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory, uint64, uint64) (unsafe.Pointer, error) {
+		return unsafe.Pointer(&mapped[0]), nil
+	}
+	device.state.ops.unmapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory) {}
+	device.state.ops.bufferBarriers = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier) {
+	}
+	device.state.ops.copyBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, vk.Buffer, []vk.BufferCopy) {}
+	recorder := &Recorder{device: device, state: recorderRecording}
+	if err := recorder.Upload(buffer, 0, []byte{1}); err != nil {
+		t.Fatalf("first Upload: %v", err)
+	}
+	if err := recorder.Upload(buffer, 1, []byte{2}); err != nil {
+		t.Fatalf("second Upload: %v", err)
+	}
+	if len(recorder.transfers) != 2 {
+		t.Fatalf("recorder transfers = %d, want 2", len(recorder.transfers))
+	}
+	first := recorder.transfers[0].resource
+	second := recorder.transfers[1].resource
+	if first == second || first.buffer == second.buffer || first.memory == second.memory {
+		t.Fatal("multiple uploads share an active transfer lease")
+	}
+	if err := recorder.Abort(); err != nil {
+		t.Fatalf("Abort: %v", err)
+	}
+	if got := len(device.idleTransfers); got != 2 {
+		t.Fatalf("idle transfers after Abort = %d, want 2", got)
+	}
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("buffer Close: %v", err)
+	}
+	device.drainTransferPool(device.state)
+}
+
+func TestRecorderReusesTransfersAfterKnownCompletion(t *testing.T) {
+	device, _, createCount := fakeBufferDevice("")
+	buffer, err := device.NewBuffer(16)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+	mapped := make([]byte, 16)
+	device.state.ops.mapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory, uint64, uint64) (unsafe.Pointer, error) {
+		return unsafe.Pointer(&mapped[0]), nil
+	}
+	device.state.ops.unmapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory) {}
+	device.state.ops.bufferBarriers = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier) {
+	}
+	device.state.ops.copyBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, vk.Buffer, []vk.BufferCopy) {}
+	device.state.ops.endCommandBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer) error { return nil }
+	nextFence := vk.Fence(20)
+	device.state.ops.createFence = func(*vk.DeviceFuncs, vk.Device, *vk.FenceCreateInfo) (vk.Fence, error) {
+		nextFence++
+		return nextFence, nil
+	}
+	device.state.ops.destroyFence = func(*vk.DeviceFuncs, vk.Device, vk.Fence) {}
+	device.state.ops.queueSubmit = func(*vk.DeviceFuncs, vk.Queue, []vk.SubmitInfo, vk.Fence) error { return nil }
+	device.state.ops.waitForFences = func(*vk.DeviceFuncs, vk.Device, []vk.Fence, bool, uint64) error { return nil }
+
+	run := func() {
+		t.Helper()
+		recorder := &Recorder{device: device, state: recorderRecording}
+		if err := recorder.Upload(buffer, 0, []byte{1, 2, 3, 4}); err != nil {
+			t.Fatalf("Upload: %v", err)
+		}
+		destination := make([]byte, 4)
+		if err := recorder.Download(buffer, 0, destination); err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+		if err := recorder.SubmitAndWait(); err != nil {
+			t.Fatalf("SubmitAndWait: %v", err)
+		}
+	}
+
+	run()
+	if got := *createCount; got != 3 {
+		t.Fatalf("creations after warmup = %d, want one storage and two transfer buffers", got)
+	}
+	run()
+	if got := *createCount; got != 3 {
+		t.Fatalf("warmed recorder created another transfer buffer: creations=%d", got)
+	}
+	if got := len(device.idleTransfers); got != 2 {
+		t.Fatalf("idle transfers after repeated submission = %d, want 2", got)
+	}
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("buffer Close: %v", err)
+	}
+	device.drainTransferPool(device.state)
+}
+
+func TestRecorderSubmitFailureReturnsUnsubmittedTransfer(t *testing.T) {
+	submitErr := errors.New("injected submit failure")
+	device, _, _ := fakeBufferDevice("")
+	buffer, err := device.NewBuffer(16)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+	mapped := make([]byte, 16)
+	device.state.ops.mapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory, uint64, uint64) (unsafe.Pointer, error) {
+		return unsafe.Pointer(&mapped[0]), nil
+	}
+	device.state.ops.unmapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory) {}
+	device.state.ops.bufferBarriers = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier) {
+	}
+	device.state.ops.copyBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, vk.Buffer, []vk.BufferCopy) {}
+	device.state.ops.endCommandBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer) error { return nil }
+	device.state.ops.createFence = func(*vk.DeviceFuncs, vk.Device, *vk.FenceCreateInfo) (vk.Fence, error) {
+		return vk.Fence(12), nil
+	}
+	destroyedFences := 0
+	device.state.ops.destroyFence = func(*vk.DeviceFuncs, vk.Device, vk.Fence) { destroyedFences++ }
+	device.state.ops.queueSubmit = func(*vk.DeviceFuncs, vk.Queue, []vk.SubmitInfo, vk.Fence) error {
+		return submitErr
+	}
+
+	recorder := &Recorder{device: device, state: recorderRecording}
+	if err := recorder.Upload(buffer, 0, []byte{1}); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if err := recorder.SubmitAndWait(); !errors.Is(err, submitErr) {
+		t.Fatalf("SubmitAndWait error = %v, want submit failure", err)
+	}
+	if recorder.state != recorderAborted {
+		t.Fatalf("recorder state = %d, want aborted", recorder.state)
+	}
+	if destroyedFences != 1 {
+		t.Fatalf("destroyed fences = %d, want 1", destroyedFences)
+	}
+	if got := len(device.idleTransfers); got != 1 {
+		t.Fatalf("idle transfers after submit failure = %d, want 1", got)
+	}
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("buffer Close: %v", err)
+	}
+	device.drainTransferPool(device.state)
+}
+
+func TestRecorderWaitFailureRetainsResourcesUntilDeviceCleanup(t *testing.T) {
+	waitErr := errors.New("injected wait failure")
+	device, events, _ := fakeBufferDevice("")
+	buffer, err := device.NewBuffer(16)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+	mapped := make([]byte, 16)
+	device.state.ops.mapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory, uint64, uint64) (unsafe.Pointer, error) {
+		return unsafe.Pointer(&mapped[0]), nil
+	}
+	device.state.ops.unmapMemory = func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory) {}
+	device.state.ops.bufferBarriers = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier) {
+	}
+	device.state.ops.copyBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, vk.Buffer, []vk.BufferCopy) {}
+	device.state.ops.endCommandBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer) error { return nil }
+	device.state.ops.createFence = func(*vk.DeviceFuncs, vk.Device, *vk.FenceCreateInfo) (vk.Fence, error) {
+		return vk.Fence(11), nil
+	}
+	destroyedFences := 0
+	device.state.ops.destroyFence = func(*vk.DeviceFuncs, vk.Device, vk.Fence) { destroyedFences++ }
+	device.state.ops.queueSubmit = func(*vk.DeviceFuncs, vk.Queue, []vk.SubmitInfo, vk.Fence) error { return nil }
+	device.state.ops.waitForFences = func(*vk.DeviceFuncs, vk.Device, []vk.Fence, bool, uint64) error {
+		return waitErr
+	}
+	destroyedPools := 0
+	device.state.ops.destroyCommandPool = func(*vk.DeviceFuncs, vk.Device, vk.CommandPool) { destroyedPools++ }
+	waitIdleCalls := 0
+	destroyedDevices := 0
+	device.state.deviceFns = &vk.DeviceFuncs{}
+	device.state.hooks.deviceWaitIdle = func(*vk.DeviceFuncs, vk.Device) error {
+		waitIdleCalls++
+		return nil
+	}
+	device.state.hooks.destroyDevice = func(*vk.DeviceFuncs, vk.Device) { destroyedDevices++ }
+
+	recorder := &Recorder{
+		device:  device,
+		pool:    vk.CommandPool(7),
+		command: vk.CommandBuffer(9),
+		state:   recorderRecording,
+	}
+	recorder.childID, err = device.addChild(recorder)
+	if err != nil {
+		t.Fatalf("add recorder child: %v", err)
+	}
+	if err := recorder.Upload(buffer, 0, []byte{1, 2, 3}); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if err := recorder.SubmitAndWait(); !errors.Is(err, waitErr) {
+		t.Fatalf("SubmitAndWait error = %v, want wait failure", err)
+	}
+	if recorder.state != recorderCompletionUnknown {
+		t.Fatalf("recorder state = %d, want completion unknown", recorder.state)
+	}
+	if destroyedFences != 0 || destroyedPools != 0 || len(*events) != 0 {
+		t.Fatalf("native resources released after uncertain wait: fences=%d pools=%d events=%v",
+			destroyedFences, destroyedPools, *events)
+	}
+	if got := len(device.idleTransfers); got != 0 {
+		t.Fatalf("idle transfers after uncertain wait = %d, want 0", got)
+	}
+	if err := buffer.Close(); err == nil {
+		t.Fatal("buffer closed while uncertain submission retained it")
+	}
+	if err := recorder.Abort(); err != nil {
+		t.Fatalf("Abort after uncertain wait: %v", err)
+	}
+	if destroyedFences != 0 || destroyedPools != 0 || len(*events) != 0 {
+		t.Fatal("Abort released resources with unknown completion")
+	}
+
+	if err := device.Close(); err != nil {
+		t.Fatalf("Device.Close: %v", err)
+	}
+	if destroyedFences != 1 || destroyedPools != 1 {
+		t.Fatalf("device cleanup counts: fences=%d pools=%d, want 1 each", destroyedFences, destroyedPools)
+	}
+	if waitIdleCalls != 1 || destroyedDevices != 1 {
+		t.Fatalf("device lifecycle counts: waits=%d destroys=%d, want 1 each", waitIdleCalls, destroyedDevices)
+	}
+	want := []string{
+		"destroy-buffer:2", "free-memory:2",
+		"destroy-buffer:1", "free-memory:1",
+	}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("device cleanup events = %v, want %v", *events, want)
+	}
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("buffer Close after device cleanup: %v", err)
 	}
 }
 

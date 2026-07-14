@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image"
+	"math"
 	"runtime"
 	"testing"
 
@@ -20,6 +21,7 @@ func BenchmarkPhaseCorrelate(b *testing.B) {
 
 	maxWidth := max(imageA.Bounds().Dx(), imageB.Bounds().Dx())
 	maxHeight := max(imageA.Bounds().Dy(), imageB.Bounds().Dy())
+	reference := loadBenchmarkReference(b, imageA, imageB, maxWidth, maxHeight)
 	backends := []struct {
 		name    string
 		backend registration.Backend
@@ -55,6 +57,7 @@ func BenchmarkPhaseCorrelate(b *testing.B) {
 			if err != nil {
 				b.Fatalf("warm up %s correlator: %v", backend.name, err)
 			}
+			checkBenchmarkResult(b, backend.name, result, reference)
 			benchmarkResult = result
 
 			b.StopTimer()
@@ -90,6 +93,69 @@ func BenchmarkPhaseCorrelate(b *testing.B) {
 	}
 	if vulkanMillisecondsPerOp > 0 && cpuMillisecondsPerOp > 0 {
 		fmt.Printf("CPU/Vulkan time ratio: %.2fx\n", cpuMillisecondsPerOp/vulkanMillisecondsPerOp)
+	}
+}
+
+func loadBenchmarkReference(
+	b *testing.B,
+	imageA, imageB *image.RGBA,
+	maxWidth, maxHeight int,
+) *registration.Result {
+	b.Helper()
+	correlator, err := registration.NewCorrelator(
+		maxWidth,
+		maxHeight,
+		registration.WithBackend(registration.BackendCPU),
+	)
+	if err != nil {
+		b.Fatalf("create CPU reference correlator: %v", err)
+	}
+	result, err := correlator.PhaseCorrelate(imageA, imageB)
+	if err != nil {
+		_ = correlator.Close()
+		b.Fatalf("compute CPU reference transform: %v", err)
+	}
+	if err := correlator.Close(); err != nil {
+		b.Fatalf("close CPU reference correlator: %v", err)
+	}
+	checkBenchmarkResult(b, "CPU reference", result, nil)
+	return result
+}
+
+func checkBenchmarkResult(
+	b *testing.B,
+	name string,
+	result, reference *registration.Result,
+) {
+	b.Helper()
+	if result == nil {
+		b.Fatalf("%s result is nil", name)
+	}
+	values := []float64{
+		result.Angle,
+		result.Scale,
+		result.Tx,
+		result.Ty,
+		result.RotationConfidence,
+		result.TranslationConfidence,
+	}
+	for _, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			b.Fatalf("%s result contains non-finite values: %#v", name, result)
+		}
+	}
+	if result.Scale <= 0 || result.RotationConfidence <= 0 || result.TranslationConfidence <= 0 {
+		b.Fatalf("%s result is not a valid transform: %#v", name, result)
+	}
+	if reference == nil {
+		return
+	}
+	angleDelta := math.Mod(result.Angle-reference.Angle+180, 360) - 180
+	if math.Abs(angleDelta) > 0.25 ||
+		math.Abs(result.Scale-reference.Scale) > 0.01 ||
+		math.Abs(result.Tx-reference.Tx) > 0.25 ||
+		math.Abs(result.Ty-reference.Ty) > 0.25 {
+		b.Fatalf("%s transform = %#v, want CPU reference %#v", name, result, reference)
 	}
 }
 

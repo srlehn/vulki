@@ -1,6 +1,8 @@
 package registration
 
 import (
+	"bytes"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"math"
@@ -189,6 +191,116 @@ func TestPackRGBAHandlesSubimageStrideAndBounds(t *testing.T) {
 				t.Errorf("packed[%d,%d] = %#x, want %#x", x, y, got, want)
 			}
 		}
+	}
+}
+
+func TestPackRGBABytesUsesTightNonZeroOriginStorage(t *testing.T) {
+	pixels := []byte{
+		1, 2, 3, 4,
+		5, 6, 7, 8,
+		9, 10, 11, 12,
+		13, 14, 15, 16,
+	}
+	img := &image.RGBA{
+		Pix:    pixels,
+		Stride: 8,
+		Rect:   image.Rect(5, 7, 7, 9),
+	}
+	packed, err := packRGBABytes(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(packed, pixels) {
+		t.Fatalf("packed bytes = %v, want %v", packed, pixels)
+	}
+	if &packed[0] != &pixels[0] {
+		t.Fatal("tightly packed image storage was copied")
+	}
+
+	words, err := packRGBA(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, word := range words {
+		if got := binary.LittleEndian.Uint32(packed[index*4:]); got != word {
+			t.Errorf("packed word %d = %#x, want %#x", index, got, word)
+		}
+	}
+}
+
+func TestPackRGBABytesCopiesOnlyActivePaddedRows(t *testing.T) {
+	parent := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	for y := range 3 {
+		for x := range 4 {
+			parent.SetRGBA(x, y, color.RGBA{R: uint8(10*y + x), G: uint8(x), B: uint8(y), A: 255})
+		}
+	}
+	sub := parent.SubImage(image.Rect(1, 1, 3, 3)).(*image.RGBA)
+	packed, err := packRGBABytes(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packed) != 16 {
+		t.Fatalf("packed byte length = %d, want 16", len(packed))
+	}
+	for y := range 2 {
+		for x := range 2 {
+			got := packed[(y*2+x)*4 : (y*2+x+1)*4]
+			pixel := sub.RGBAAt(x+1, y+1)
+			want := []byte{pixel.R, pixel.G, pixel.B, pixel.A}
+			if !bytes.Equal(got, want) {
+				t.Errorf("packed pixel (%d,%d) = %v, want %v", x, y, got, want)
+			}
+		}
+	}
+	if &packed[0] == &sub.Pix[0] {
+		t.Fatal("padded image unexpectedly reused strided storage")
+	}
+}
+
+func TestPackRGBABytesHandlesOneRow(t *testing.T) {
+	img := &image.RGBA{
+		Pix:    []byte{1, 2, 3, 4, 5, 6, 7, 8},
+		Stride: 32,
+		Rect:   image.Rect(0, 0, 2, 1),
+	}
+	packed, err := packRGBABytes(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	if !bytes.Equal(packed, want) {
+		t.Fatalf("packed bytes = %v, want %v", packed, want)
+	}
+}
+
+func TestPackRGBABytesRejectsInvalidLayouts(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	tests := []struct {
+		name string
+		img  *image.RGBA
+	}{
+		{name: "nil"},
+		{name: "empty", img: &image.RGBA{}},
+		{
+			name: "short stride",
+			img:  &image.RGBA{Pix: make([]byte, 8), Stride: 4, Rect: image.Rect(0, 0, 2, 1)},
+		},
+		{
+			name: "short storage",
+			img:  &image.RGBA{Pix: make([]byte, 8), Stride: 8, Rect: image.Rect(0, 0, 2, 2)},
+		},
+		{
+			name: "row overflow",
+			img:  &image.RGBA{Stride: maxInt, Rect: image.Rect(0, 0, maxInt/4+1, 1)},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := packRGBABytes(test.img); err == nil {
+				t.Fatal("invalid RGBA layout succeeded")
+			}
+		})
 	}
 }
 

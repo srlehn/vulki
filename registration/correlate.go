@@ -418,32 +418,42 @@ func (c *Correlator) createPipelines() error {
 	return nil
 }
 
-// packRGBA copies an image into a tightly packed row-major pixel buffer. The
-// copy is required because RGBA subimages can have non-zero bounds and a stride
-// inherited from a larger parent image.
-func packRGBA(img *image.RGBA) ([]uint32, error) {
+func rgbaLayout(img *image.RGBA) (width, height, rowBytes, required int, err error) {
 	if img == nil {
-		return nil, fmt.Errorf("registration: nil RGBA image")
+		return 0, 0, 0, 0, fmt.Errorf("registration: nil RGBA image")
 	}
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
 	if w <= 0 || h <= 0 {
-		return nil, fmt.Errorf("registration: RGBA image must have non-empty bounds")
+		return 0, 0, 0, 0, fmt.Errorf("registration: RGBA image must have non-empty bounds")
 	}
 	maxInt := int(^uint(0) >> 1)
-	if w > maxInt/4 || w > maxInt/h {
-		return nil, fmt.Errorf("registration: RGBA image dimensions overflow int")
+	if w > maxInt/4 {
+		return 0, 0, 0, 0, fmt.Errorf("registration: RGBA row size overflows int")
 	}
-	rowBytes := w * 4
+	rowBytes = w * 4
+	if h > maxInt/rowBytes {
+		return 0, 0, 0, 0, fmt.Errorf("registration: packed RGBA size overflows int")
+	}
 	if img.Stride < rowBytes {
-		return nil, fmt.Errorf("registration: RGBA stride %d is smaller than row size %d", img.Stride, rowBytes)
+		return 0, 0, 0, 0, fmt.Errorf("registration: RGBA stride %d is smaller than row size %d", img.Stride, rowBytes)
 	}
 	if h-1 > (maxInt-rowBytes)/img.Stride {
-		return nil, fmt.Errorf("registration: RGBA layout overflows int")
+		return 0, 0, 0, 0, fmt.Errorf("registration: RGBA layout overflows int")
 	}
-	required := (h-1)*img.Stride + rowBytes
+	required = (h-1)*img.Stride + rowBytes
 	if len(img.Pix) < required {
-		return nil, fmt.Errorf("registration: RGBA pixel data has %d bytes, need %d", len(img.Pix), required)
+		return 0, 0, 0, 0, fmt.Errorf("registration: RGBA pixel data has %d bytes, need %d", len(img.Pix), required)
+	}
+	return w, h, rowBytes, required, nil
+}
+
+// packRGBA copies an image into tightly packed little-endian RGBA words for
+// the CPU reference implementation.
+func packRGBA(img *image.RGBA) ([]uint32, error) {
+	w, h, rowBytes, _, err := rgbaLayout(img)
+	if err != nil {
+		return nil, err
 	}
 
 	pixels := make([]uint32, w*h)
@@ -458,6 +468,25 @@ func packRGBA(img *image.RGBA) ([]uint32, error) {
 		}
 	}
 	return pixels, nil
+}
+
+// packRGBABytes returns the shader's tightly packed R, G, B, A byte layout.
+// Tight images are returned as a view because Recorder.Upload copies the input
+// synchronously. Images with row padding are copied once into packed storage.
+func packRGBABytes(img *image.RGBA) ([]byte, error) {
+	_, h, rowBytes, required, err := rgbaLayout(img)
+	if err != nil {
+		return nil, err
+	}
+	packedSize := rowBytes * h
+	if img.Stride == rowBytes {
+		return img.Pix[:required], nil
+	}
+	packed := make([]byte, packedSize)
+	for y := range h {
+		copy(packed[y*rowBytes:(y+1)*rowBytes], img.Pix[y*img.Stride:y*img.Stride+rowBytes])
+	}
+	return packed, nil
 }
 
 func asRGBA(img image.Image) (*image.RGBA, error) {
@@ -551,11 +580,11 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB image.Image) (*Result, error) {
 	if c.backend != BackendVulkan || c.device == nil || c.device.Closed() {
 		return nil, fmt.Errorf("registration: invalid correlator backend")
 	}
-	pixelsA, err := packRGBA(rgbaA)
+	pixelsA, err := packRGBABytes(rgbaA)
 	if err != nil {
 		return nil, fmt.Errorf("registration: image A: %w", err)
 	}
-	pixelsB, err := packRGBA(rgbaB)
+	pixelsB, err := packRGBABytes(rgbaB)
 	if err != nil {
 		return nil, fmt.Errorf("registration: image B: %w", err)
 	}
@@ -584,10 +613,10 @@ func (c *Correlator) PhaseCorrelate(imgA, imgB image.Image) (*Result, error) {
 		return nil, err
 	}
 	defer rec.Abort()
-	if err := rec.Upload(c.rgbaA, encodeUint32Slice(pixelsA)); err != nil {
+	if err := rec.Upload(c.rgbaA, pixelsA); err != nil {
 		return nil, fmt.Errorf("registration: record imgA upload: %w", err)
 	}
-	if err := rec.Upload(c.rgbaB, encodeUint32Slice(pixelsB)); err != nil {
+	if err := rec.Upload(c.rgbaB, pixelsB); err != nil {
 		return nil, fmt.Errorf("registration: record imgB upload: %w", err)
 	}
 

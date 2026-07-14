@@ -166,14 +166,6 @@ func newElementBuffer[T any](device *vulki.Device, count int) (*vulki.Buffer, er
 	return device.NewBuffer(uint64(count) * elementSize)
 }
 
-func encodeUint32Slice(values []uint32) []byte {
-	encoded := make([]byte, len(values)*4)
-	for index, value := range values {
-		binary.LittleEndian.PutUint32(encoded[index*4:], value)
-	}
-	return encoded
-}
-
 func decodeFloat32Slice(encoded []byte) []float32 {
 	values := make([]float32, len(encoded)/4)
 	for index := range values {

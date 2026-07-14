@@ -13,18 +13,21 @@ import (
 // Device owns a logical compute device and the resources created from it.
 // Its zero value is closed and safe to close again.
 type Device struct {
-	mu        sync.Mutex
-	cond      *sync.Cond
-	queueMu   sync.Mutex
-	state     *deviceState
-	info      DeviceInfo
-	children  []childRecord
-	nextChild uint64
-	closing   bool
-	closed    bool
-	closeDone chan struct{}
-	closeErr  error
-	active    int
+	mu                sync.Mutex
+	cond              *sync.Cond
+	queueMu           sync.Mutex
+	transferMu        sync.Mutex
+	state             *deviceState
+	info              DeviceInfo
+	children          []childRecord
+	idleTransfers     []*transferResource
+	nextChild         uint64
+	idleTransferBytes uint64
+	closing           bool
+	closed            bool
+	closeDone         chan struct{}
+	closeErr          error
+	active            int
 }
 
 // DeviceInfo is an immutable snapshot of the selected compute device.
@@ -332,6 +335,7 @@ func (d *Device) Close() error {
 		}
 	}
 	if state != nil {
+		d.drainTransferPool(state)
 		state.release()
 	}
 	d.queueMu.Unlock()

@@ -15,6 +15,14 @@ const (
 	recorderRecording recorderState = iota + 1
 	recorderSubmitted
 	recorderAborted
+	recorderCompletionUnknown
+)
+
+type recorderTransferDisposition uint8
+
+const (
+	recorderRecycleTransfers recorderTransferDisposition = iota + 1
+	recorderDiscardTransfers
 )
 
 // Recorder batches buffer updates, barriers, and dispatches into one queue
@@ -25,6 +33,7 @@ type Recorder struct {
 	childID     uint64
 	pool        vk.CommandPool
 	command     vk.CommandBuffer
+	fence       vk.Fence
 	state       recorderState
 	buffers     []*Buffer
 	bindingSets []*BindingSet
@@ -32,9 +41,9 @@ type Recorder struct {
 }
 
 type recorderTransfer struct {
-	buffer      vk.Buffer
-	memory      vk.DeviceMemory
+	resource    *transferResource
 	destination []byte
+	reusable    bool
 }
 
 // NewRecorder begins a command recording owned by d.
@@ -62,7 +71,7 @@ func (d *Device) NewRecorder() (*Recorder, error) {
 	}
 	commands, err := state.ops.allocateCommandBuffers(state.deviceFns, state.device, &allocation)
 	if err != nil {
-		recorder.closeNative(state)
+		recorder.closeNative(state, recorderDiscardTransfers)
 		return nil, fmt.Errorf("vulki: allocate recorder command buffer: %w", err)
 	}
 	recorder.command = commands[0]
@@ -71,12 +80,12 @@ func (d *Device) NewRecorder() (*Recorder, error) {
 		Flags: vk.CommandBufferUsageOneTimeSubmitBit,
 	}
 	if err := state.ops.beginCommandBuffer(state.deviceFns, recorder.command, &begin); err != nil {
-		recorder.closeNative(state)
+		recorder.closeNative(state, recorderDiscardTransfers)
 		return nil, fmt.Errorf("vulki: begin recorder command buffer: %w", err)
 	}
 	recorder.childID, err = d.addChild(recorder)
 	if err != nil {
-		recorder.closeNative(state)
+		recorder.closeNative(state, recorderDiscardTransfers)
 		return nil, err
 	}
 	return recorder, nil
@@ -180,26 +189,26 @@ func (r *Recorder) Upload(buffer *Buffer, offset uint64, data []byte) error {
 		return err
 	}
 	defer r.device.endOperation()
-	transferBuffer, transferMemory, err := createTransferResources(state, uint64(len(data)))
+	transfer, err := r.device.acquireTransfer(state, uint64(len(data)))
 	if err != nil {
 		return fmt.Errorf("vulki: prepare recorded upload: %w", err)
 	}
 	keepTransfer := false
 	defer func() {
 		if !keepTransfer {
-			destroyTransferResources(state, transferBuffer, transferMemory)
+			r.device.discardTransfer(state, transfer)
 		}
 	}()
-	pointer, err := state.ops.mapMemory(state.deviceFns, state.device, transferMemory, 0, uint64(len(data)))
+	pointer, err := state.ops.mapMemory(state.deviceFns, state.device, transfer.memory, 0, uint64(len(data)))
 	if err != nil {
 		return fmt.Errorf("vulki: map recorded upload memory: %w", err)
 	}
 	if pointer == nil {
-		state.ops.unmapMemory(state.deviceFns, state.device, transferMemory)
+		state.ops.unmapMemory(state.deviceFns, state.device, transfer.memory)
 		return fmt.Errorf("vulki: map recorded upload memory returned a nil pointer")
 	}
 	copy(unsafe.Slice((*byte)(pointer), len(data)), data)
-	state.ops.unmapMemory(state.deviceFns, state.device, transferMemory)
+	state.ops.unmapMemory(state.deviceFns, state.device, transfer.memory)
 
 	pre := vk.BufferMemoryBarrier{
 		SType:               vk.StructureTypeBufferMemoryBarrier,
@@ -214,7 +223,7 @@ func (r *Recorder) Upload(buffer *Buffer, offset uint64, data []byte) error {
 		vk.PipelineStageTransferBit,
 		[]vk.BufferMemoryBarrier{pre},
 	)
-	state.ops.copyBuffer(state.deviceFns, r.command, transferBuffer, buffer.buffer, []vk.BufferCopy{{
+	state.ops.copyBuffer(state.deviceFns, r.command, transfer.buffer, buffer.buffer, []vk.BufferCopy{{
 		DstOffset: offset,
 		Size:      uint64(len(data)),
 	}})
@@ -231,7 +240,7 @@ func (r *Recorder) Upload(buffer *Buffer, offset uint64, data []byte) error {
 		[]vk.BufferMemoryBarrier{post},
 	)
 	r.retainBufferLocked(buffer)
-	r.transfers = append(r.transfers, recorderTransfer{buffer: transferBuffer, memory: transferMemory})
+	r.transfers = append(r.transfers, recorderTransfer{resource: transfer, reusable: true})
 	keepTransfer = true
 	return nil
 }
@@ -265,7 +274,7 @@ func (r *Recorder) Download(buffer *Buffer, offset uint64, destination []byte) e
 		return err
 	}
 	defer r.device.endOperation()
-	transferBuffer, transferMemory, err := createTransferResources(state, uint64(len(destination)))
+	transfer, err := r.device.acquireTransfer(state, uint64(len(destination)))
 	if err != nil {
 		return fmt.Errorf("vulki: prepare recorded download: %w", err)
 	}
@@ -282,7 +291,7 @@ func (r *Recorder) Download(buffer *Buffer, offset uint64, destination []byte) e
 		vk.PipelineStageTransferBit,
 		[]vk.BufferMemoryBarrier{pre},
 	)
-	state.ops.copyBuffer(state.deviceFns, r.command, buffer.buffer, transferBuffer, []vk.BufferCopy{{
+	state.ops.copyBuffer(state.deviceFns, r.command, buffer.buffer, transfer.buffer, []vk.BufferCopy{{
 		SrcOffset: offset,
 		Size:      uint64(len(destination)),
 	}})
@@ -291,7 +300,7 @@ func (r *Recorder) Download(buffer *Buffer, offset uint64, destination []byte) e
 		SrcAccessMask:       vk.AccessTransferWriteBit,
 		DstAccessMask:       vk.AccessHostReadBit,
 		SrcQueueFamilyIndex: ^uint32(0), DstQueueFamilyIndex: ^uint32(0),
-		Buffer: transferBuffer, Size: uint64(len(destination)),
+		Buffer: transfer.buffer, Size: uint64(len(destination)),
 	}
 	state.ops.bufferBarriers(
 		state.deviceFns, r.command,
@@ -300,7 +309,7 @@ func (r *Recorder) Download(buffer *Buffer, offset uint64, destination []byte) e
 	)
 	r.retainBufferLocked(buffer)
 	r.transfers = append(r.transfers, recorderTransfer{
-		buffer: transferBuffer, memory: transferMemory, destination: destination,
+		resource: transfer, destination: destination, reusable: true,
 	})
 	return nil
 }
@@ -391,7 +400,9 @@ func (r *Recorder) Dispatch(kernel *Kernel, bindings *BindingSet, groups Workgro
 }
 
 // SubmitAndWait ends recording, submits once, waits for completion, and closes
-// the Recorder. It may be called only while recording.
+// the Recorder. It may be called only while recording. If submission succeeds
+// but completion cannot be established, referenced resources remain retained
+// until the Device is closed.
 func (r *Recorder) SubmitAndWait() error {
 	if r == nil {
 		return fmt.Errorf("vulki: recorder is closed")
@@ -407,29 +418,31 @@ func (r *Recorder) SubmitAndWait() error {
 	}
 	defer r.device.endOperation()
 	if err := state.ops.endCommandBuffer(state.deviceFns, r.command); err != nil {
-		r.finish(state, recorderAborted)
+		r.finish(state, recorderAborted, recorderRecycleTransfers)
 		return fmt.Errorf("vulki: end recorder command buffer: %w", err)
 	}
 	fenceInfo := vk.FenceCreateInfo{SType: vk.StructureTypeFenceCreateInfo}
-	fence, err := state.ops.createFence(state.deviceFns, state.device, &fenceInfo)
+	r.fence, err = state.ops.createFence(state.deviceFns, state.device, &fenceInfo)
 	if err != nil {
-		r.finish(state, recorderAborted)
+		r.finish(state, recorderAborted, recorderRecycleTransfers)
 		return fmt.Errorf("vulki: create recorder fence: %w", err)
 	}
-	defer state.ops.destroyFence(state.deviceFns, state.device, fence)
 	submit := vk.SubmitInfo{SType: vk.StructureTypeSubmitInfo, CommandBufferCount: 1, PCommandBuffers: &r.command}
 	r.device.queueMu.Lock()
-	err = state.ops.queueSubmit(state.deviceFns, state.queue, []vk.SubmitInfo{submit}, fence)
-	if err == nil {
-		err = state.ops.waitForFences(state.deviceFns, state.device, []vk.Fence{fence}, true, ^uint64(0))
-	}
-	r.device.queueMu.Unlock()
+	err = state.ops.queueSubmit(state.deviceFns, state.queue, []vk.SubmitInfo{submit}, r.fence)
 	if err != nil {
-		r.finish(state, recorderSubmitted)
+		r.device.queueMu.Unlock()
+		r.finish(state, recorderAborted, recorderRecycleTransfers)
 		return fmt.Errorf("vulki: submit recorder: %w", err)
 	}
+	r.state = recorderCompletionUnknown
+	err = state.ops.waitForFences(state.deviceFns, state.device, []vk.Fence{r.fence}, true, ^uint64(0))
+	r.device.queueMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("vulki: wait for recorder completion: %w", err)
+	}
 	err = r.readDownloads(state)
-	r.finish(state, recorderSubmitted)
+	r.finish(state, recorderSubmitted, recorderRecycleTransfers)
 	if err != nil {
 		return err
 	}
@@ -457,7 +470,7 @@ func (r *Recorder) abort(fromDevice bool) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state != recorderRecording {
+	if r.state != recorderRecording && (!fromDevice || r.state != recorderCompletionUnknown) {
 		return nil
 	}
 	var state *deviceState
@@ -476,7 +489,11 @@ func (r *Recorder) abort(fromDevice bool) error {
 		}
 		defer r.device.endOperation()
 	}
-	r.finish(state, recorderAborted)
+	if r.state == recorderCompletionUnknown {
+		r.finish(state, recorderSubmitted, recorderDiscardTransfers)
+	} else {
+		r.finish(state, recorderAborted, recorderRecycleTransfers)
+	}
 	return nil
 }
 
@@ -503,14 +520,18 @@ func (r *Recorder) retainBindingSet(set *BindingSet) {
 	r.bindingSets = append(r.bindingSets, set)
 }
 
-func (r *Recorder) finish(state *deviceState, final recorderState) {
-	r.closeNative(state)
+func (r *Recorder) finish(state *deviceState, final recorderState, disposition recorderTransferDisposition) {
+	r.closeNative(state, disposition)
 	r.releaseReferences()
 	r.state = final
 	r.device.removeChild(r.childID)
 }
 
-func (r *Recorder) closeNative(state *deviceState) {
+func (r *Recorder) closeNative(state *deviceState, disposition recorderTransferDisposition) {
+	if r.fence != 0 {
+		state.ops.destroyFence(state.deviceFns, state.device, r.fence)
+		r.fence = 0
+	}
 	if r.pool != 0 {
 		state.ops.destroyCommandPool(state.deviceFns, state.device, r.pool)
 		r.pool = 0
@@ -518,27 +539,35 @@ func (r *Recorder) closeNative(state *deviceState) {
 	}
 	for index := len(r.transfers) - 1; index >= 0; index-- {
 		transfer := r.transfers[index]
-		destroyTransferResources(state, transfer.buffer, transfer.memory)
+		if disposition == recorderRecycleTransfers && transfer.reusable {
+			r.device.releaseTransfer(state, transfer.resource)
+		} else {
+			r.device.discardTransfer(state, transfer.resource)
+		}
+		transfer.destination = nil
 	}
 	r.transfers = nil
 }
 
 func (r *Recorder) readDownloads(state *deviceState) error {
-	for _, transfer := range r.transfers {
+	for index := range r.transfers {
+		transfer := &r.transfers[index]
 		if transfer.destination == nil {
 			continue
 		}
 		size := uint64(len(transfer.destination))
-		pointer, err := state.ops.mapMemory(state.deviceFns, state.device, transfer.memory, 0, size)
+		pointer, err := state.ops.mapMemory(state.deviceFns, state.device, transfer.resource.memory, 0, size)
 		if err != nil {
+			transfer.reusable = false
 			return fmt.Errorf("vulki: map recorded download memory: %w", err)
 		}
 		if pointer == nil {
-			state.ops.unmapMemory(state.deviceFns, state.device, transfer.memory)
+			state.ops.unmapMemory(state.deviceFns, state.device, transfer.resource.memory)
+			transfer.reusable = false
 			return fmt.Errorf("vulki: map recorded download memory returned a nil pointer")
 		}
 		copy(transfer.destination, unsafe.Slice((*byte)(pointer), len(transfer.destination)))
-		state.ops.unmapMemory(state.deviceFns, state.device, transfer.memory)
+		state.ops.unmapMemory(state.deviceFns, state.device, transfer.resource.memory)
 	}
 	return nil
 }

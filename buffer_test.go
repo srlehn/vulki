@@ -217,23 +217,26 @@ func fakeBufferDevice(failure string) (*Device, *[]string, *int) {
 	createCount := new(int)
 	nextMemory := 0
 	allocationCount := 0
+	transferBuffers := make(map[vk.Buffer]bool)
 	operations := deviceOps{
-		createBuffer: func(*vk.DeviceFuncs, vk.Device, *vk.BufferCreateInfo) (vk.Buffer, error) {
+		createBuffer: func(_ *vk.DeviceFuncs, _ vk.Device, info *vk.BufferCreateInfo) (vk.Buffer, error) {
 			if failure == "create" || failure == "staging-create" && *createCount == 1 {
 				return 0, errors.New("injected create failure")
 			}
 			(*createCount)++
-			return vk.Buffer(*createCount), nil
+			buffer := vk.Buffer(*createCount)
+			transferBuffers[buffer] = info.Usage&vk.BufferUsageStorageBufferBit == 0
+			return buffer, nil
 		},
 		destroyBuffer: func(_ *vk.DeviceFuncs, _ vk.Device, buffer vk.Buffer) {
 			*events = append(*events, fmt.Sprintf("destroy-buffer:%d", buffer))
 		},
 		bufferMemoryRequirements: func(_ *vk.DeviceFuncs, _ vk.Device, buffer vk.Buffer) vk.MemoryRequirements {
 			bits := uint32(1)
-			if failure == "memory-type" {
+			if failure == "memory-type" && !transferBuffers[buffer] {
 				bits = 2
 			}
-			if buffer == 2 {
+			if transferBuffers[buffer] {
 				bits = 2
 				if failure == "staging-memory-type" {
 					bits = 1
@@ -253,7 +256,7 @@ func fakeBufferDevice(failure string) (*Device, *[]string, *int) {
 			*events = append(*events, fmt.Sprintf("free-memory:%d", memory))
 		},
 		bindBufferMemory: func(_ *vk.DeviceFuncs, _ vk.Device, buffer vk.Buffer, _ vk.DeviceMemory, _ uint64) error {
-			if failure == "bind" || failure == "staging-bind" && buffer == 2 {
+			if failure == "bind" || failure == "staging-bind" && transferBuffers[buffer] {
 				return errors.New("injected bind failure")
 			}
 			return nil
