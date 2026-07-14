@@ -2,6 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/srlehn/vulki.svg)](https://pkg.go.dev/github.com/srlehn/vulki)
 [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![DeepWiki](https://img.shields.io/badge/DeepWiki-srlehn%2Fvulki-blue.svg)](https://deepwiki.com/srlehn/vulki)
 ![experimental](https://img.shields.io/badge/status-experimental-orange.svg)
 
 Vulki is a cgo-free compute library with a small owner-bound Go API, direct
