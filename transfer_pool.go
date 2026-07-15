@@ -1,57 +1,41 @@
 package vulki
 
-import (
-	"fmt"
-
-	"github.com/srlehn/vulki/vk"
-)
+import "fmt"
 
 const (
 	maxIdleTransferResources = 16
 	maxIdleTransferBytes     = 64 * 1024 * 1024
 )
 
-// transferResource is exclusively owned by its current recorder or by the
-// device's idle pool. It must not return to the pool while submitted commands
-// may still reference it.
-type transferResource struct {
-	buffer   vk.Buffer
-	memory   vk.DeviceMemory
-	capacity uint64
-}
-
-func (d *Device) acquireTransfer(state *deviceState, size uint64) (*transferResource, error) {
-	if d == nil || state == nil || size == 0 {
+func (d *Device) acquireTransfer(state *deviceState, direction transferDirection, size uint64) (*transferResource, error) {
+	if d == nil || state == nil || !direction.valid() || size == 0 {
 		return nil, fmt.Errorf("vulki: invalid transfer resource request")
 	}
 
 	d.transferMu.Lock()
+	idle := d.idleTransfers[direction]
 	best := -1
-	for index, resource := range d.idleTransfers {
+	for index, resource := range idle {
 		if resource == nil || resource.capacity < size {
 			continue
 		}
-		if best < 0 || resource.capacity < d.idleTransfers[best].capacity {
+		if best < 0 || resource.capacity < idle[best].capacity {
 			best = index
 		}
 	}
 	if best >= 0 {
-		resource := d.idleTransfers[best]
-		last := len(d.idleTransfers) - 1
-		d.idleTransfers[best] = d.idleTransfers[last]
-		d.idleTransfers[last] = nil
-		d.idleTransfers = d.idleTransfers[:last]
-		d.idleTransferBytes -= resource.capacity
+		resource := idle[best]
+		last := len(idle) - 1
+		idle[best] = idle[last]
+		idle[last] = nil
+		d.idleTransfers[direction] = idle[:last]
+		d.idleTransferBytes -= resource.retainedSize()
 		d.transferMu.Unlock()
 		return resource, nil
 	}
 	d.transferMu.Unlock()
 
-	buffer, memory, err := createTransferResources(state, size)
-	if err != nil {
-		return nil, err
-	}
-	return &transferResource{buffer: buffer, memory: memory, capacity: size}, nil
+	return createTransferResource(state, direction, size)
 }
 
 func (d *Device) releaseTransfer(state *deviceState, resource *transferResource) {
@@ -60,12 +44,14 @@ func (d *Device) releaseTransfer(state *deviceState, resource *transferResource)
 	}
 
 	d.transferMu.Lock()
-	keep := len(d.idleTransfers) < maxIdleTransferResources &&
-		resource.capacity <= maxIdleTransferBytes &&
-		d.idleTransferBytes <= maxIdleTransferBytes-resource.capacity
+	retainedSize := resource.retainedSize()
+	keep := resource.direction.valid() &&
+		d.idleTransferCountLocked() < maxIdleTransferResources &&
+		retainedSize <= maxIdleTransferBytes &&
+		d.idleTransferBytes <= maxIdleTransferBytes-retainedSize
 	if keep {
-		d.idleTransfers = append(d.idleTransfers, resource)
-		d.idleTransferBytes += resource.capacity
+		d.idleTransfers[resource.direction] = append(d.idleTransfers[resource.direction], resource)
+		d.idleTransferBytes += retainedSize
 	}
 	d.transferMu.Unlock()
 	if !keep {
@@ -85,8 +71,11 @@ func (d *Device) drainTransferPool(state *deviceState) {
 		return
 	}
 	d.transferMu.Lock()
-	resources := d.idleTransfers
-	d.idleTransfers = nil
+	resources := make([]*transferResource, 0, d.idleTransferCountLocked())
+	for direction := transferUpload; direction < transferDirectionCount; direction++ {
+		resources = append(resources, d.idleTransfers[direction]...)
+		d.idleTransfers[direction] = nil
+	}
 	d.idleTransferBytes = 0
 	d.transferMu.Unlock()
 	for index := len(resources) - 1; index >= 0; index-- {
@@ -98,8 +87,24 @@ func discardTransferResource(state *deviceState, resource *transferResource) {
 	if state == nil || resource == nil {
 		return
 	}
-	destroyTransferResources(state, resource.buffer, resource.memory)
+	if resource.buffer != 0 {
+		state.ops.destroyBuffer(state.deviceFns, state.device, resource.buffer)
+	}
+	if resource.memory != 0 {
+		state.ops.freeMemory(state.deviceFns, state.device, resource.memory)
+	}
 	resource.buffer = 0
 	resource.memory = 0
 	resource.capacity = 0
+	resource.allocationSize = 0
+	resource.properties = 0
+	resource.direction = transferDirectionCount
+}
+
+func (d *Device) idleTransferCountLocked() int {
+	count := 0
+	for direction := transferUpload; direction < transferDirectionCount; direction++ {
+		count += len(d.idleTransfers[direction])
+	}
+	return count
 }

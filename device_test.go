@@ -167,6 +167,9 @@ func TestDeviceInfoIsSnapshot(t *testing.T) {
 	if info.Limits.MaxStorageBufferSize != 4096 || info.Limits.MaxComputeWorkGroupCount != [3]uint32{7, 8, 9} {
 		t.Fatalf("Info limits = %#v", info.Limits)
 	}
+	if device.state.nonCoherentAtomSize != 64 {
+		t.Fatalf("internal noncoherent atom size = %d, want 64", device.state.nonCoherentAtomSize)
+	}
 
 	info.AdapterName = "changed"
 	if got := device.Info().AdapterName; got != "Fake GPU" {
@@ -313,6 +316,7 @@ func fakeOpenHooks(failure string, waitErr error, cleanup *[]string) openHooks {
 					MaxComputeWorkGroupCount:       [3]uint32{7, 8, 9},
 					MaxComputeWorkGroupInvocations: 10,
 					MaxComputeWorkGroupSize:        [3]uint32{11, 12, 13},
+					NonCoherentAtomSize:            64,
 				},
 			}
 			copy(properties.DeviceName[:], "Fake GPU")

@@ -10,39 +10,40 @@ import (
 
 // Buffer is a fixed-size storage buffer owned by its creating Device.
 type Buffer struct {
-	mu            sync.Mutex
-	device        *Device
-	childID       uint64
-	size          uint64
-	buffer        vk.Buffer
-	memory        vk.DeviceMemory
-	stagingBuffer vk.Buffer
-	stagingMemory vk.DeviceMemory
-	references    int
-	closed        bool
+	mu              sync.Mutex
+	device          *Device
+	childID         uint64
+	size            uint64
+	buffer          vk.Buffer
+	memory          vk.DeviceMemory
+	uploadStaging   *transferResource
+	downloadStaging *transferResource
+	references      int
+	closed          bool
 }
 
 type deviceOps struct {
-	createBuffer             func(*vk.DeviceFuncs, vk.Device, *vk.BufferCreateInfo) (vk.Buffer, error)
-	destroyBuffer            func(*vk.DeviceFuncs, vk.Device, vk.Buffer)
-	bufferMemoryRequirements func(*vk.DeviceFuncs, vk.Device, vk.Buffer) vk.MemoryRequirements
-	allocateMemory           func(*vk.DeviceFuncs, vk.Device, *vk.MemoryAllocateInfo) (vk.DeviceMemory, error)
-	freeMemory               func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory)
-	bindBufferMemory         func(*vk.DeviceFuncs, vk.Device, vk.Buffer, vk.DeviceMemory, uint64) error
-	mapMemory                func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory, uint64, uint64) (unsafe.Pointer, error)
-	unmapMemory              func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory)
-	createCommandPool        func(*vk.DeviceFuncs, vk.Device, *vk.CommandPoolCreateInfo) (vk.CommandPool, error)
-	destroyCommandPool       func(*vk.DeviceFuncs, vk.Device, vk.CommandPool)
-	allocateCommandBuffers   func(*vk.DeviceFuncs, vk.Device, *vk.CommandBufferAllocateInfo) ([]vk.CommandBuffer, error)
-	beginCommandBuffer       func(*vk.DeviceFuncs, vk.CommandBuffer, *vk.CommandBufferBeginInfo) error
-	bufferBarriers           func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier)
-	copyBuffer               func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, vk.Buffer, []vk.BufferCopy)
-	endCommandBuffer         func(*vk.DeviceFuncs, vk.CommandBuffer) error
-	createFence              func(*vk.DeviceFuncs, vk.Device, *vk.FenceCreateInfo) (vk.Fence, error)
-	destroyFence             func(*vk.DeviceFuncs, vk.Device, vk.Fence)
-	queueSubmit              func(*vk.DeviceFuncs, vk.Queue, []vk.SubmitInfo, vk.Fence) error
-	waitForFences            func(*vk.DeviceFuncs, vk.Device, []vk.Fence, bool, uint64) error
-	updateBuffer             func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, uint64, []byte) error
+	createBuffer                 func(*vk.DeviceFuncs, vk.Device, *vk.BufferCreateInfo) (vk.Buffer, error)
+	destroyBuffer                func(*vk.DeviceFuncs, vk.Device, vk.Buffer)
+	bufferMemoryRequirements     func(*vk.DeviceFuncs, vk.Device, vk.Buffer) vk.MemoryRequirements
+	allocateMemory               func(*vk.DeviceFuncs, vk.Device, *vk.MemoryAllocateInfo) (vk.DeviceMemory, error)
+	freeMemory                   func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory)
+	bindBufferMemory             func(*vk.DeviceFuncs, vk.Device, vk.Buffer, vk.DeviceMemory, uint64) error
+	mapMemory                    func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory, uint64, uint64) (unsafe.Pointer, error)
+	unmapMemory                  func(*vk.DeviceFuncs, vk.Device, vk.DeviceMemory)
+	invalidateMappedMemoryRanges func(*vk.DeviceFuncs, vk.Device, []vk.MappedMemoryRange) error
+	createCommandPool            func(*vk.DeviceFuncs, vk.Device, *vk.CommandPoolCreateInfo) (vk.CommandPool, error)
+	destroyCommandPool           func(*vk.DeviceFuncs, vk.Device, vk.CommandPool)
+	allocateCommandBuffers       func(*vk.DeviceFuncs, vk.Device, *vk.CommandBufferAllocateInfo) ([]vk.CommandBuffer, error)
+	beginCommandBuffer           func(*vk.DeviceFuncs, vk.CommandBuffer, *vk.CommandBufferBeginInfo) error
+	bufferBarriers               func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier)
+	copyBuffer                   func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, vk.Buffer, []vk.BufferCopy)
+	endCommandBuffer             func(*vk.DeviceFuncs, vk.CommandBuffer) error
+	createFence                  func(*vk.DeviceFuncs, vk.Device, *vk.FenceCreateInfo) (vk.Fence, error)
+	destroyFence                 func(*vk.DeviceFuncs, vk.Device, vk.Fence)
+	queueSubmit                  func(*vk.DeviceFuncs, vk.Queue, []vk.SubmitInfo, vk.Fence) error
+	waitForFences                func(*vk.DeviceFuncs, vk.Device, []vk.Fence, bool, uint64) error
+	updateBuffer                 func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, uint64, []byte) error
 }
 
 var directDeviceOps = deviceOps{
@@ -69,6 +70,9 @@ var directDeviceOps = deviceOps{
 	},
 	unmapMemory: func(functions *vk.DeviceFuncs, device vk.Device, memory vk.DeviceMemory) {
 		functions.UnmapMemory(device, memory)
+	},
+	invalidateMappedMemoryRanges: func(functions *vk.DeviceFuncs, device vk.Device, ranges []vk.MappedMemoryRange) error {
+		return functions.InvalidateMappedMemoryRanges(device, ranges)
 	},
 	createCommandPool: func(functions *vk.DeviceFuncs, device vk.Device, info *vk.CommandPoolCreateInfo) (vk.CommandPool, error) {
 		return functions.CreateCommandPool(device, info)
@@ -203,20 +207,21 @@ func (b *Buffer) UploadAt(offset uint64, data []byte) error {
 		return err
 	}
 	defer b.device.endOperation()
-	if err := b.ensureStaging(state); err != nil {
+	staging, err := b.ensureStaging(state, transferUpload)
+	if err != nil {
 		return err
 	}
 
-	pointer, err := state.ops.mapMemory(state.deviceFns, state.device, b.stagingMemory, 0, uint64(len(data)))
+	pointer, err := state.ops.mapMemory(state.deviceFns, state.device, staging.memory, 0, uint64(len(data)))
 	if err != nil {
 		return fmt.Errorf("vulki: map upload staging memory: %w", err)
 	}
 	if pointer == nil {
-		state.ops.unmapMemory(state.deviceFns, state.device, b.stagingMemory)
+		state.ops.unmapMemory(state.deviceFns, state.device, staging.memory)
 		return fmt.Errorf("vulki: map upload staging memory returned a nil pointer")
 	}
 	copy(unsafe.Slice((*byte)(pointer), len(data)), data)
-	state.ops.unmapMemory(state.deviceFns, state.device, b.stagingMemory)
+	state.ops.unmapMemory(state.deviceFns, state.device, staging.memory)
 	barrier := vk.BufferMemoryBarrier{
 		SType:               vk.StructureTypeBufferMemoryBarrier,
 		SrcAccessMask:       vk.AccessShaderReadBit | vk.AccessShaderWriteBit | vk.AccessTransferWriteBit,
@@ -229,7 +234,7 @@ func (b *Buffer) UploadAt(offset uint64, data []byte) error {
 	}
 	if err := b.device.copyBufferAndWait(
 		state,
-		b.stagingBuffer,
+		staging.buffer,
 		b.buffer,
 		0,
 		offset,
@@ -268,7 +273,8 @@ func (b *Buffer) DownloadAt(offset uint64, destination []byte) error {
 		return err
 	}
 	defer b.device.endOperation()
-	if err := b.ensureStaging(state); err != nil {
+	staging, err := b.ensureStaging(state, transferDownload)
+	if err != nil {
 		return err
 	}
 	barrier := vk.BufferMemoryBarrier{
@@ -284,7 +290,7 @@ func (b *Buffer) DownloadAt(offset uint64, destination []byte) error {
 	if err := b.device.copyBufferAndWait(
 		state,
 		b.buffer,
-		b.stagingBuffer,
+		staging.buffer,
 		offset,
 		0,
 		uint64(len(destination)),
@@ -295,16 +301,9 @@ func (b *Buffer) DownloadAt(offset uint64, destination []byte) error {
 		return fmt.Errorf("vulki: download buffer: %w", err)
 	}
 
-	pointer, err := state.ops.mapMemory(state.deviceFns, state.device, b.stagingMemory, 0, uint64(len(destination)))
-	if err != nil {
-		return fmt.Errorf("vulki: map download staging memory: %w", err)
+	if err := readTransferMemory(state, staging, 0, destination); err != nil {
+		return fmt.Errorf("vulki: read download staging memory: %w", err)
 	}
-	if pointer == nil {
-		state.ops.unmapMemory(state.deviceFns, state.device, b.stagingMemory)
-		return fmt.Errorf("vulki: map download staging memory returned a nil pointer")
-	}
-	copy(destination, unsafe.Slice((*byte)(pointer), len(destination)))
-	state.ops.unmapMemory(state.deviceFns, state.device, b.stagingMemory)
 	return nil
 }
 
@@ -382,71 +381,32 @@ func (b *Buffer) validateRange(offset uint64, length int) error {
 	return nil
 }
 
-func (b *Buffer) ensureStaging(state *deviceState) error {
-	if b.stagingBuffer != 0 {
-		return nil
+func (b *Buffer) ensureStaging(state *deviceState, direction transferDirection) (*transferResource, error) {
+	var staging **transferResource
+	switch direction {
+	case transferUpload:
+		staging = &b.uploadStaging
+	case transferDownload:
+		staging = &b.downloadStaging
+	default:
+		return nil, fmt.Errorf("vulki: invalid transfer direction %d", direction)
 	}
-	buffer, memory, err := createTransferResources(state, b.size)
+	if *staging != nil {
+		return *staging, nil
+	}
+	resource, err := createTransferResource(state, direction, b.size)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	b.stagingBuffer = buffer
-	b.stagingMemory = memory
-	return nil
-}
-
-func createTransferResources(state *deviceState, size uint64) (vk.Buffer, vk.DeviceMemory, error) {
-	info := vk.BufferCreateInfo{
-		SType:       vk.StructureTypeBufferCreateInfo,
-		Size:        size,
-		Usage:       vk.BufferUsageTransferSrcBit | vk.BufferUsageTransferDstBit,
-		SharingMode: vk.SharingModeExclusive,
-	}
-	buffer, err := state.ops.createBuffer(state.deviceFns, state.device, &info)
-	if err != nil {
-		return 0, 0, fmt.Errorf("vulki: create transfer buffer: %w", err)
-	}
-	requirements := state.ops.bufferMemoryRequirements(state.deviceFns, state.device, buffer)
-	memoryIndex, err := findMemoryType(
-		state.memory,
-		requirements.MemoryTypeBits,
-		vk.MemoryPropertyHostVisibleBit|vk.MemoryPropertyHostCoherentBit,
-	)
-	if err != nil {
-		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
-		return 0, 0, fmt.Errorf("vulki: select host-visible transfer memory: %w", err)
-	}
-	allocation := vk.MemoryAllocateInfo{
-		SType:           vk.StructureTypeMemoryAllocateInfo,
-		AllocationSize:  requirements.Size,
-		MemoryTypeIndex: memoryIndex,
-	}
-	memory, err := state.ops.allocateMemory(state.deviceFns, state.device, &allocation)
-	if err != nil {
-		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
-		return 0, 0, fmt.Errorf("vulki: allocate transfer memory: %w", err)
-	}
-	if err := state.ops.bindBufferMemory(state.deviceFns, state.device, buffer, memory, 0); err != nil {
-		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
-		state.ops.freeMemory(state.deviceFns, state.device, memory)
-		return 0, 0, fmt.Errorf("vulki: bind transfer memory: %w", err)
-	}
-	return buffer, memory, nil
-}
-
-func destroyTransferResources(state *deviceState, buffer vk.Buffer, memory vk.DeviceMemory) {
-	if buffer != 0 {
-		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
-	}
-	if memory != 0 {
-		state.ops.freeMemory(state.deviceFns, state.device, memory)
-	}
+	*staging = resource
+	return resource, nil
 }
 
 func (b *Buffer) closeNative(state *deviceState) {
-	destroyTransferResources(state, b.stagingBuffer, b.stagingMemory)
-	b.stagingBuffer = 0
-	b.stagingMemory = 0
+	discardTransferResource(state, b.downloadStaging)
+	b.downloadStaging = nil
+	discardTransferResource(state, b.uploadStaging)
+	b.uploadStaging = nil
 	if b.buffer != 0 {
 		state.ops.destroyBuffer(state.deviceFns, state.device, b.buffer)
 		b.buffer = 0

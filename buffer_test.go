@@ -66,6 +66,111 @@ func TestBufferStagingIsLazyAndCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestBufferUsesSeparatePersistentStagingByDirection(t *testing.T) {
+	device, events, createCount := fakeBufferDevice("")
+	buffer, err := device.NewBuffer(64)
+	if err != nil {
+		t.Fatalf("NewBuffer: %v", err)
+	}
+
+	upload, err := buffer.ensureStaging(device.state, transferUpload)
+	if err != nil {
+		t.Fatalf("create upload staging: %v", err)
+	}
+	reusedUpload, err := buffer.ensureStaging(device.state, transferUpload)
+	if err != nil {
+		t.Fatalf("reuse upload staging: %v", err)
+	}
+	download, err := buffer.ensureStaging(device.state, transferDownload)
+	if err != nil {
+		t.Fatalf("create download staging: %v", err)
+	}
+	reusedDownload, err := buffer.ensureStaging(device.state, transferDownload)
+	if err != nil {
+		t.Fatalf("reuse download staging: %v", err)
+	}
+	if upload != reusedUpload || download != reusedDownload {
+		t.Fatal("a staging direction did not reuse its persistent resource")
+	}
+	if upload == download || upload.buffer == download.buffer || upload.memory == download.memory {
+		t.Fatal("upload and download share a persistent staging resource")
+	}
+	if upload.direction != transferUpload || download.direction != transferDownload {
+		t.Fatalf("staging directions = upload %v download %v", upload.direction, download.direction)
+	}
+	if got := *createCount; got != 3 {
+		t.Fatalf("buffer creations = %d, want storage plus two staging buffers", got)
+	}
+
+	if err := buffer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	want := []string{
+		"destroy-buffer:3", "free-memory:3",
+		"destroy-buffer:2", "free-memory:2",
+		"destroy-buffer:1", "free-memory:1",
+	}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("cleanup = %v, want %v", *events, want)
+	}
+}
+
+func TestBufferStagingFailurePreservesOppositeDirection(t *testing.T) {
+	tests := []struct {
+		name            string
+		firstDirection  transferDirection
+		failedDirection transferDirection
+	}{
+		{name: "download failure preserves upload", firstDirection: transferUpload, failedDirection: transferDownload},
+		{name: "upload failure preserves download", firstDirection: transferDownload, failedDirection: transferUpload},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			device, events, _ := fakeBufferDevice("")
+			buffer, err := device.NewBuffer(64)
+			if err != nil {
+				t.Fatalf("NewBuffer: %v", err)
+			}
+			first, err := buffer.ensureStaging(device.state, test.firstDirection)
+			if err != nil {
+				t.Fatalf("create first staging: %v", err)
+			}
+
+			createBuffer := device.state.ops.createBuffer
+			device.state.ops.createBuffer = func(functions *vk.DeviceFuncs, deviceHandle vk.Device, info *vk.BufferCreateInfo) (vk.Buffer, error) {
+				failedUsage := vk.BufferUsageTransferSrcBit
+				if test.failedDirection == transferDownload {
+					failedUsage = vk.BufferUsageTransferDstBit
+				}
+				if info.Usage == failedUsage {
+					return 0, errors.New("injected opposite staging failure")
+				}
+				return createBuffer(functions, deviceHandle, info)
+			}
+			if _, err := buffer.ensureStaging(device.state, test.failedDirection); err == nil {
+				t.Fatal("opposite staging creation succeeded")
+			}
+			reused, err := buffer.ensureStaging(device.state, test.firstDirection)
+			if err != nil {
+				t.Fatalf("reuse first staging: %v", err)
+			}
+			if reused != first {
+				t.Fatal("opposite staging failure replaced the existing resource")
+			}
+			if err := buffer.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			want := []string{
+				"destroy-buffer:2", "free-memory:2",
+				"destroy-buffer:1", "free-memory:1",
+			}
+			if !reflect.DeepEqual(*events, want) {
+				t.Fatalf("cleanup = %v, want %v", *events, want)
+			}
+		})
+	}
+}
+
 func TestBufferCleansPartialStagingAllocation(t *testing.T) {
 	tests := []struct {
 		failure string
@@ -218,6 +323,7 @@ func fakeBufferDevice(failure string) (*Device, *[]string, *int) {
 	nextMemory := 0
 	allocationCount := 0
 	transferBuffers := make(map[vk.Buffer]bool)
+	bufferSizes := make(map[vk.Buffer]uint64)
 	operations := deviceOps{
 		createBuffer: func(_ *vk.DeviceFuncs, _ vk.Device, info *vk.BufferCreateInfo) (vk.Buffer, error) {
 			if failure == "create" || failure == "staging-create" && *createCount == 1 {
@@ -226,6 +332,7 @@ func fakeBufferDevice(failure string) (*Device, *[]string, *int) {
 			(*createCount)++
 			buffer := vk.Buffer(*createCount)
 			transferBuffers[buffer] = info.Usage&vk.BufferUsageStorageBufferBit == 0
+			bufferSizes[buffer] = info.Size
 			return buffer, nil
 		},
 		destroyBuffer: func(_ *vk.DeviceFuncs, _ vk.Device, buffer vk.Buffer) {
@@ -242,7 +349,7 @@ func fakeBufferDevice(failure string) (*Device, *[]string, *int) {
 					bits = 1
 				}
 			}
-			return vk.MemoryRequirements{Size: 64, MemoryTypeBits: bits}
+			return vk.MemoryRequirements{Size: bufferSizes[buffer], MemoryTypeBits: bits}
 		},
 		allocateMemory: func(*vk.DeviceFuncs, vk.Device, *vk.MemoryAllocateInfo) (vk.DeviceMemory, error) {
 			allocationCount++

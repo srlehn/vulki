@@ -174,6 +174,7 @@ const (
 	MemoryPropertyDeviceLocalBit  MemoryPropertyFlags = 0x00000001
 	MemoryPropertyHostVisibleBit  MemoryPropertyFlags = 0x00000002
 	MemoryPropertyHostCoherentBit MemoryPropertyFlags = 0x00000004
+	MemoryPropertyHostCachedBit   MemoryPropertyFlags = 0x00000008
 )
 
 // SharingMode controls buffer access across queue families.

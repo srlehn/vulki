@@ -189,7 +189,7 @@ func (r *Recorder) Upload(buffer *Buffer, offset uint64, data []byte) error {
 		return err
 	}
 	defer r.device.endOperation()
-	transfer, err := r.device.acquireTransfer(state, uint64(len(data)))
+	transfer, err := r.device.acquireTransfer(state, transferUpload, uint64(len(data)))
 	if err != nil {
 		return fmt.Errorf("vulki: prepare recorded upload: %w", err)
 	}
@@ -274,7 +274,7 @@ func (r *Recorder) Download(buffer *Buffer, offset uint64, destination []byte) e
 		return err
 	}
 	defer r.device.endOperation()
-	transfer, err := r.device.acquireTransfer(state, uint64(len(destination)))
+	transfer, err := r.device.acquireTransfer(state, transferDownload, uint64(len(destination)))
 	if err != nil {
 		return fmt.Errorf("vulki: prepare recorded download: %w", err)
 	}
@@ -555,19 +555,10 @@ func (r *Recorder) readDownloads(state *deviceState) error {
 		if transfer.destination == nil {
 			continue
 		}
-		size := uint64(len(transfer.destination))
-		pointer, err := state.ops.mapMemory(state.deviceFns, state.device, transfer.resource.memory, 0, size)
-		if err != nil {
+		if err := readTransferMemory(state, transfer.resource, 0, transfer.destination); err != nil {
 			transfer.reusable = false
-			return fmt.Errorf("vulki: map recorded download memory: %w", err)
+			return fmt.Errorf("vulki: read recorded download memory: %w", err)
 		}
-		if pointer == nil {
-			state.ops.unmapMemory(state.deviceFns, state.device, transfer.resource.memory)
-			transfer.reusable = false
-			return fmt.Errorf("vulki: map recorded download memory returned a nil pointer")
-		}
-		copy(transfer.destination, unsafe.Slice((*byte)(pointer), len(transfer.destination)))
-		state.ops.unmapMemory(state.deviceFns, state.device, transfer.resource.memory)
 	}
 	return nil
 }

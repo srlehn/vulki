@@ -20,7 +20,7 @@ type Device struct {
 	state             *deviceState
 	info              DeviceInfo
 	children          []childRecord
-	idleTransfers     []*transferResource
+	idleTransfers     [transferDirectionCount][]*transferResource
 	nextChild         uint64
 	idleTransferBytes uint64
 	closing           bool
@@ -61,18 +61,19 @@ type Limits struct {
 }
 
 type deviceState struct {
-	hooks       openHooks
-	loader      *vk.Loader
-	instanceFns *vk.InstanceFuncs
-	deviceFns   *vk.DeviceFuncs
-	instance    vk.Instance
-	physical    vk.PhysicalDevice
-	device      vk.Device
-	queue       vk.Queue
-	queueFamily uint32
-	memory      vk.PhysicalDeviceMemoryProperties
-	ops         deviceOps
-	kernelOps   kernelOps
+	hooks               openHooks
+	loader              *vk.Loader
+	instanceFns         *vk.InstanceFuncs
+	deviceFns           *vk.DeviceFuncs
+	instance            vk.Instance
+	physical            vk.PhysicalDevice
+	device              vk.Device
+	queue               vk.Queue
+	queueFamily         uint32
+	memory              vk.PhysicalDeviceMemoryProperties
+	nonCoherentAtomSize uint64
+	ops                 deviceOps
+	kernelOps           kernelOps
 }
 
 type deviceChild interface {
@@ -255,6 +256,7 @@ func openWithHooks(hooks openHooks) (_ *Device, err error) {
 	}
 	state.memory = hooks.memoryProperties(state.instanceFns, state.physical)
 	properties := hooks.deviceProperties(state.instanceFns, state.physical)
+	state.nonCoherentAtomSize = properties.Limits.NonCoherentAtomSize
 
 	device := &Device{
 		state:     state,

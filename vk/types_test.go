@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+func TestMemoryPropertyHostCachedBitValue(t *testing.T) {
+	if got, want := MemoryPropertyHostCachedBit, MemoryPropertyFlags(0x00000008); got != want {
+		t.Fatalf("MemoryPropertyHostCachedBit = %#x, want %#x", uint32(got), uint32(want))
+	}
+}
+
 func TestResultString(t *testing.T) {
 	if got, want := ErrorDeviceLost.String(), "VK_ERROR_DEVICE_LOST"; got != want {
 		t.Fatalf("ErrorDeviceLost.String() = %q, want %q", got, want)
