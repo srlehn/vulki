@@ -161,6 +161,9 @@ func TestDeviceInfoIsSnapshot(t *testing.T) {
 	if info.Implementation != "Vulkan" || info.AdapterName != "Fake GPU" {
 		t.Fatalf("Info = %#v", info)
 	}
+	if info.DeviceType != DeviceTypeDiscreteGPU {
+		t.Fatalf("Info device type = %d, want %d", info.DeviceType, DeviceTypeDiscreteGPU)
+	}
 	if info.VendorID != 0x1234 || info.DeviceID != 0x5678 {
 		t.Fatalf("Info IDs = %#v", info)
 	}
@@ -174,6 +177,29 @@ func TestDeviceInfoIsSnapshot(t *testing.T) {
 	info.AdapterName = "changed"
 	if got := device.Info().AdapterName; got != "Fake GPU" {
 		t.Fatalf("mutating snapshot changed device info to %q", got)
+	}
+}
+
+func TestDeviceInfoPreservesPhysicalDeviceType(t *testing.T) {
+	tests := []struct {
+		name   string
+		native vk.PhysicalDeviceType
+		want   DeviceType
+	}{
+		{name: "other", native: vk.PhysicalDeviceTypeOther, want: DeviceTypeOther},
+		{name: "integrated GPU", native: vk.PhysicalDeviceTypeIntegratedGPU, want: DeviceTypeIntegratedGPU},
+		{name: "discrete GPU", native: vk.PhysicalDeviceTypeDiscreteGPU, want: DeviceTypeDiscreteGPU},
+		{name: "virtual GPU", native: vk.PhysicalDeviceTypeVirtualGPU, want: DeviceTypeVirtualGPU},
+		{name: "CPU", native: vk.PhysicalDeviceTypeCPU, want: DeviceTypeCPU},
+		{name: "future value", native: vk.PhysicalDeviceType(99), want: DeviceType(99)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			info := deviceInfoSnapshot(vk.PhysicalDeviceProperties{DeviceType: test.native})
+			if info.DeviceType != test.want {
+				t.Fatalf("DeviceType = %d, want %d", info.DeviceType, test.want)
+			}
+		})
 	}
 }
 
@@ -311,6 +337,7 @@ func fakeOpenHooks(failure string, waitErr error, cleanup *[]string) openHooks {
 				DriverVersion: 2,
 				VendorID:      0x1234,
 				DeviceID:      0x5678,
+				DeviceType:    vk.PhysicalDeviceTypeDiscreteGPU,
 				Limits: vk.PhysicalDeviceLimits{
 					MaxStorageBufferRange:          4096,
 					MaxComputeWorkGroupCount:       [3]uint32{7, 8, 9},

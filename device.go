@@ -30,12 +30,31 @@ type Device struct {
 	active            int
 }
 
+// DeviceType identifies the broad class of a physical compute device.
+// Values match Vulkan's VkPhysicalDeviceType constants.
+type DeviceType uint32
+
+const (
+	// DeviceTypeOther identifies a device that does not fit another class.
+	DeviceTypeOther DeviceType = 0
+	// DeviceTypeIntegratedGPU identifies an integrated GPU.
+	DeviceTypeIntegratedGPU DeviceType = 1
+	// DeviceTypeDiscreteGPU identifies a discrete GPU.
+	DeviceTypeDiscreteGPU DeviceType = 2
+	// DeviceTypeVirtualGPU identifies a virtual GPU.
+	DeviceTypeVirtualGPU DeviceType = 3
+	// DeviceTypeCPU identifies a CPU Vulkan implementation.
+	DeviceTypeCPU DeviceType = 4
+)
+
 // DeviceInfo is an immutable snapshot of the selected compute device.
 type DeviceInfo struct {
 	// Implementation names the active native compute implementation.
 	Implementation string
 	// AdapterName is the native physical-device name.
 	AdapterName string
+	// DeviceType identifies the broad class of the physical device.
+	DeviceType DeviceType
 	// APIVersion is the Vulkan API version reported by the adapter.
 	APIVersion uint32
 	// DriverVersion is the implementation-defined native driver version.
@@ -454,6 +473,7 @@ func deviceInfoSnapshot(properties vk.PhysicalDeviceProperties) DeviceInfo {
 	return DeviceInfo{
 		Implementation: "Vulkan",
 		AdapterName:    string(name),
+		DeviceType:     DeviceType(properties.DeviceType),
 		APIVersion:     properties.APIVersion,
 		DriverVersion:  properties.DriverVersion,
 		VendorID:       properties.VendorID,
