@@ -2,10 +2,51 @@ package shader
 
 import (
 	"fmt"
+	"slices"
+	"sync"
 
 	"github.com/gogpu/naga"
 	"github.com/gogpu/naga/spirv"
 )
+
+// maxCachedModules bounds the process-wide compilation cache so dynamically
+// generated shader sources cannot grow it without limit.
+const maxCachedModules = 64
+
+type moduleCacheKey struct {
+	source  string
+	options naga.CompileOptions
+}
+
+var (
+	moduleCacheMu sync.Mutex
+	moduleCache   map[moduleCacheKey][]byte
+)
+
+func loadCachedModule(key moduleCacheKey) ([]byte, bool) {
+	moduleCacheMu.Lock()
+	defer moduleCacheMu.Unlock()
+	module, ok := moduleCache[key]
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(module), true
+}
+
+func storeCachedModule(key moduleCacheKey, module []byte) {
+	moduleCacheMu.Lock()
+	defer moduleCacheMu.Unlock()
+	if moduleCache == nil {
+		moduleCache = make(map[moduleCacheKey][]byte)
+	}
+	if _, exists := moduleCache[key]; !exists && len(moduleCache) >= maxCachedModules {
+		for evicted := range moduleCache {
+			delete(moduleCache, evicted)
+			break
+		}
+	}
+	moduleCache[key] = slices.Clone(module)
+}
 
 // SPIRVVersion identifies a supported SPIR-V output version.
 type SPIRVVersion uint8
@@ -88,6 +129,10 @@ func withoutValidation() Option {
 
 // Compile compiles WGSL source code to SPIR-V. With no options it targets
 // SPIR-V 1.3, includes no debug information, and validates the shader.
+//
+// Successful compilations are cached process-wide, keyed by the source and
+// the resolved options. Every call returns a module the caller owns, so
+// modifying a returned module cannot affect later compilations.
 func Compile(wgslSource string, options ...Option) ([]byte, error) {
 	config := compileConfig{naga: naga.DefaultOptions()}
 	for i, option := range options {
@@ -105,6 +150,10 @@ func Compile(wgslSource string, options ...Option) ([]byte, error) {
 		}
 	}
 
+	key := moduleCacheKey{source: wgslSource, options: config.naga}
+	if module, ok := loadCachedModule(key); ok {
+		return module, nil
+	}
 	module, err := naga.CompileWithOptions(wgslSource, config.naga)
 	if err != nil {
 		return nil, &CompileError{
@@ -112,5 +161,6 @@ func Compile(wgslSource string, options ...Option) ([]byte, error) {
 			Message: err.Error(),
 		}
 	}
+	storeCachedModule(key, module)
 	return module, nil
 }
