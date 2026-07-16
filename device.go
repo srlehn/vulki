@@ -69,6 +69,10 @@ type DeviceInfo struct {
 	VendorID uint32
 	// DeviceID is the implementation-defined physical-device identifier.
 	DeviceID uint32
+	// DeviceLocalMemoryBytes is the total size in bytes of the physical
+	// device's device-local memory heaps. It reports capacity, not current
+	// availability.
+	DeviceLocalMemoryBytes uint64
 	// Limits contains the portable compute limits used by Vulki.
 	Limits Limits
 }
@@ -285,7 +289,7 @@ func openWithHooks(hooks openHooks) (_ *Device, err error) {
 
 	device := &Device{
 		state:     state,
-		info:      deviceInfoSnapshot(properties),
+		info:      deviceInfoSnapshot(properties, state.memory),
 		closeDone: make(chan struct{}),
 	}
 	device.cond = sync.NewCond(&device.mu)
@@ -489,19 +493,23 @@ func (state *deviceState) release() {
 	}
 }
 
-func deviceInfoSnapshot(properties vk.PhysicalDeviceProperties) DeviceInfo {
+func deviceInfoSnapshot(
+	properties vk.PhysicalDeviceProperties,
+	memory vk.PhysicalDeviceMemoryProperties,
+) DeviceInfo {
 	name := properties.DeviceName[:]
 	if end := bytes.IndexByte(name, 0); end >= 0 {
 		name = name[:end]
 	}
 	return DeviceInfo{
-		Implementation: "Vulkan",
-		AdapterName:    string(name),
-		DeviceType:     DeviceType(properties.DeviceType),
-		APIVersion:     properties.APIVersion,
-		DriverVersion:  properties.DriverVersion,
-		VendorID:       properties.VendorID,
-		DeviceID:       properties.DeviceID,
+		Implementation:         "Vulkan",
+		AdapterName:            string(name),
+		DeviceType:             DeviceType(properties.DeviceType),
+		APIVersion:             properties.APIVersion,
+		DriverVersion:          properties.DriverVersion,
+		VendorID:               properties.VendorID,
+		DeviceID:               properties.DeviceID,
+		DeviceLocalMemoryBytes: deviceLocalMemoryBytes(memory),
 		Limits: Limits{
 			MaxStorageBufferSize:           uint64(properties.Limits.MaxStorageBufferRange),
 			MaxComputeWorkGroupCount:       properties.Limits.MaxComputeWorkGroupCount,
@@ -509,4 +517,16 @@ func deviceInfoSnapshot(properties vk.PhysicalDeviceProperties) DeviceInfo {
 			MaxComputeWorkGroupSize:        properties.Limits.MaxComputeWorkGroupSize,
 		},
 	}
+}
+
+func deviceLocalMemoryBytes(memory vk.PhysicalDeviceMemoryProperties) uint64 {
+	count := min(memory.MemoryHeapCount, uint32(len(memory.MemoryHeaps)))
+	var total uint64
+	for index := range count {
+		heap := memory.MemoryHeaps[index]
+		if heap.Flags&vk.MemoryHeapDeviceLocalBit != 0 {
+			total += heap.Size
+		}
+	}
+	return total
 }

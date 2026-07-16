@@ -12,6 +12,12 @@ func TestMemoryPropertyHostCachedBitValue(t *testing.T) {
 	}
 }
 
+func TestMemoryHeapDeviceLocalBitValue(t *testing.T) {
+	if got, want := MemoryHeapDeviceLocalBit, uint32(0x00000001); got != want {
+		t.Fatalf("MemoryHeapDeviceLocalBit = %#x, want %#x", got, want)
+	}
+}
+
 func TestResultString(t *testing.T) {
 	if got, want := ErrorDeviceLost.String(), "VK_ERROR_DEVICE_LOST"; got != want {
 		t.Fatalf("ErrorDeviceLost.String() = %q, want %q", got, want)

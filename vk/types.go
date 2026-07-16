@@ -508,6 +508,9 @@ type MemoryHeap struct {
 	Flags uint32
 }
 
+// MemoryHeapDeviceLocalBit marks a memory heap as local to the device.
+const MemoryHeapDeviceLocalBit uint32 = 0x00000001
+
 const (
 	// MaxMemoryTypes is Vulkan's maximum number of physical-device memory types.
 	MaxMemoryTypes = 32

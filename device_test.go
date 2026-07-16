@@ -195,11 +195,33 @@ func TestDeviceInfoPreservesPhysicalDeviceType(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			info := deviceInfoSnapshot(vk.PhysicalDeviceProperties{DeviceType: test.native})
+			info := deviceInfoSnapshot(vk.PhysicalDeviceProperties{DeviceType: test.native}, vk.PhysicalDeviceMemoryProperties{})
 			if info.DeviceType != test.want {
 				t.Fatalf("DeviceType = %d, want %d", info.DeviceType, test.want)
 			}
 		})
+	}
+}
+
+func TestDeviceInfoSumsDeviceLocalHeaps(t *testing.T) {
+	memory := vk.PhysicalDeviceMemoryProperties{
+		MemoryHeapCount: 3,
+		MemoryHeaps: [vk.MaxMemoryHeaps]vk.MemoryHeap{
+			{Size: 8 << 30, Flags: vk.MemoryHeapDeviceLocalBit},
+			{Size: 16 << 30},
+			{Size: 4 << 30, Flags: vk.MemoryHeapDeviceLocalBit},
+			{Size: 1 << 30, Flags: vk.MemoryHeapDeviceLocalBit},
+		},
+	}
+	info := deviceInfoSnapshot(vk.PhysicalDeviceProperties{}, memory)
+	if want := uint64(12 << 30); info.DeviceLocalMemoryBytes != want {
+		t.Fatalf("DeviceLocalMemoryBytes = %d, want %d", info.DeviceLocalMemoryBytes, want)
+	}
+
+	memory.MemoryHeapCount = vk.MaxMemoryHeaps + 5
+	info = deviceInfoSnapshot(vk.PhysicalDeviceProperties{}, memory)
+	if want := uint64(13 << 30); info.DeviceLocalMemoryBytes != want {
+		t.Fatalf("clamped DeviceLocalMemoryBytes = %d, want %d", info.DeviceLocalMemoryBytes, want)
 	}
 }
 
