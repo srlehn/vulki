@@ -68,7 +68,7 @@ func createTransferResource(state *deviceState, direction transferDirection, siz
 	}
 	buffer, err := state.ops.createBuffer(state.deviceFns, state.device, &info)
 	if err != nil {
-		return nil, fmt.Errorf("vulki: create %s transfer buffer: %w", direction, err)
+		return nil, fmt.Errorf("vulki: create %s transfer buffer: %w", direction, classifyDeviceError(err))
 	}
 	requirements := state.ops.bufferMemoryRequirements(state.deviceFns, state.device, buffer)
 	memoryIndex, properties, err := selectTransferMemoryType(state.memory, requirements.MemoryTypeBits, direction)
@@ -84,12 +84,12 @@ func createTransferResource(state *deviceState, direction transferDirection, siz
 	memory, err := state.ops.allocateMemory(state.deviceFns, state.device, &allocation)
 	if err != nil {
 		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
-		return nil, fmt.Errorf("vulki: allocate %s transfer memory: %w", direction, err)
+		return nil, fmt.Errorf("vulki: allocate %s transfer memory: %w", direction, classifyDeviceError(err))
 	}
 	if err := state.ops.bindBufferMemory(state.deviceFns, state.device, buffer, memory, 0); err != nil {
 		state.ops.destroyBuffer(state.deviceFns, state.device, buffer)
 		state.ops.freeMemory(state.deviceFns, state.device, memory)
-		return nil, fmt.Errorf("vulki: bind %s transfer memory: %w", direction, err)
+		return nil, fmt.Errorf("vulki: bind %s transfer memory: %w", direction, classifyDeviceError(err))
 	}
 	return &transferResource{
 		buffer:         buffer,

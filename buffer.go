@@ -137,7 +137,7 @@ func (d *Device) NewBuffer(size uint64) (*Buffer, error) {
 	}
 	buffer.buffer, err = state.ops.createBuffer(state.deviceFns, state.device, &info)
 	if err != nil {
-		return nil, fmt.Errorf("vulki: create storage buffer: %w", err)
+		return nil, fmt.Errorf("vulki: create storage buffer: %w", classifyDeviceError(err))
 	}
 
 	requirements := state.ops.bufferMemoryRequirements(state.deviceFns, state.device, buffer.buffer)
@@ -154,11 +154,11 @@ func (d *Device) NewBuffer(size uint64) (*Buffer, error) {
 	buffer.memory, err = state.ops.allocateMemory(state.deviceFns, state.device, &allocation)
 	if err != nil {
 		buffer.closeNative(state)
-		return nil, fmt.Errorf("vulki: allocate storage buffer memory: %w", err)
+		return nil, fmt.Errorf("vulki: allocate storage buffer memory: %w", classifyDeviceError(err))
 	}
 	if err := state.ops.bindBufferMemory(state.deviceFns, state.device, buffer.buffer, buffer.memory, 0); err != nil {
 		buffer.closeNative(state)
-		return nil, fmt.Errorf("vulki: bind storage buffer memory: %w", err)
+		return nil, fmt.Errorf("vulki: bind storage buffer memory: %w", classifyDeviceError(err))
 	}
 
 	buffer.childID, err = d.addChild(buffer)
@@ -517,6 +517,7 @@ func (d *Device) copyBufferAndWait(
 		true,
 		^uint64(0),
 	); err != nil {
+		err = classifyDeviceError(err)
 		d.retainUnknownTransientSubmission(submission, err)
 		return err
 	}

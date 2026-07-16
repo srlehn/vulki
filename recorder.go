@@ -450,6 +450,7 @@ func (r *Recorder) SubmitAndWait() error {
 	r.state = recorderCompletionUnknown
 	err = state.ops.waitForFences(state.deviceFns, state.device, []vk.Fence{r.fence}, true, ^uint64(0))
 	if err != nil {
+		err = classifyDeviceError(err)
 		r.device.markSubmissionUnknown(r.reservation, err)
 		return fmt.Errorf("vulki: wait for recorder completion: %w", err)
 	}

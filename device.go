@@ -316,6 +316,23 @@ func (d *Device) Closed() bool {
 	return d.state == nil || d.closing || d.closed
 }
 
+// Err reports why the Device no longer accepts queue submissions. It returns
+// nil while submissions are available. After a submitted fence wait fails,
+// Err returns an error matching ErrDeviceUnavailable that wraps the original
+// causes, so errors.Is can detect a wrapped ErrDeviceLost. Err does not
+// report lifecycle state; use Closed for that.
+func (d *Device) Err() error {
+	if d == nil {
+		return nil
+	}
+	d.submissionMu.Lock()
+	defer d.submissionMu.Unlock()
+	if d.submissionErr == nil {
+		return nil
+	}
+	return d.submissionUnavailableErrorLocked()
+}
+
 // Close waits for active queue work, closes remaining child resources in
 // reverse creation order, and releases the native device. Cleanup continues
 // after a wait or child error. Repeated calls after cleanup return nil.

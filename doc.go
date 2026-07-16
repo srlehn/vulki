@@ -14,7 +14,10 @@
 // Individual child resources and recorders must not be used concurrently with
 // Close; Recorder also rejects use after submission or abort. If a submitted
 // fence cannot establish completion, later submissions fail and Device.Close
-// retains the uncertain resources through its device-idle cleanup.
+// retains the uncertain resources through its device-idle cleanup. Refused
+// submissions match ErrDeviceUnavailable and Device.Err reports the sticky
+// cause; ErrOutOfDeviceMemory and ErrDeviceLost classify the underlying
+// Vulkan failures for errors.Is.
 //
 // The public API is experimental. The direct Vulkan path is cgo-free and has
 // runtime evidence on Linux. All other platforms are unsupported backlog work.

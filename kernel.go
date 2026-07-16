@@ -454,6 +454,7 @@ func (d *Device) DispatchAndWait(kernel *Kernel, bindings *BindingSet, groups Wo
 		true,
 		^uint64(0),
 	); err != nil {
+		err = classifyDeviceError(err)
 		d.retainUnknownTransientSubmission(submission, err)
 		cleanupSubmission = false
 		return fmt.Errorf("vulki: wait for dispatch: %w", err)

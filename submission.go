@@ -132,6 +132,7 @@ func (d *Device) markSubmissionUnknown(reservation *submissionReservation, cause
 	if cause == nil {
 		cause = errors.New("submission completion is unknown")
 	}
+	cause = classifyDeviceError(cause)
 	d.submissionMu.Lock()
 	d.submissionErr = errors.Join(d.submissionErr, cause)
 	if d.submissionCond != nil {
@@ -141,7 +142,7 @@ func (d *Device) markSubmissionUnknown(reservation *submissionReservation, cause
 }
 
 func (d *Device) submissionUnavailableErrorLocked() error {
-	return fmt.Errorf("vulki: cannot submit while earlier queue completion is unknown: %w", d.submissionErr)
+	return fmt.Errorf("%w: %w", ErrDeviceUnavailable, d.submissionErr)
 }
 
 func removeSubmissionReservation(
@@ -168,7 +169,7 @@ func (d *Device) submitQueue(
 ) error {
 	d.queueMu.Lock()
 	defer d.queueMu.Unlock()
-	return state.ops.queueSubmit(state.deviceFns, state.queue, submits, fence)
+	return classifyDeviceError(state.ops.queueSubmit(state.deviceFns, state.queue, submits, fence))
 }
 
 type transientSubmission struct {

@@ -117,6 +117,12 @@ complete checked example is in `cmd/demo`. Compatible submissions from separate
 goroutines may remain in flight together: disjoint buffers and shared read-only
 buffers can overlap, while any overlapping write remains ordered.
 
+Failures keep their Vulkan cause inspectable with `errors.Is`:
+`ErrOutOfDeviceMemory` marks recoverable device memory exhaustion,
+`ErrDeviceLost` marks a lost device, and `ErrDeviceUnavailable` marks a device
+that refuses further submissions after a failed fence wait. `Device.Err`
+reports that unavailable state and its cause.
+
 ## Commands
 
 Run the WGSL compute demo, which doubles 256 `float32` values and verifies the
