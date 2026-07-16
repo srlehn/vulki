@@ -234,6 +234,8 @@ func (b *Buffer) UploadAt(offset uint64, data []byte) error {
 	}
 	if err := b.device.copyBufferAndWait(
 		state,
+		b,
+		submissionWrite,
 		staging.buffer,
 		b.buffer,
 		0,
@@ -289,6 +291,8 @@ func (b *Buffer) DownloadAt(offset uint64, destination []byte) error {
 	}
 	if err := b.device.copyBufferAndWait(
 		state,
+		b,
+		submissionRead,
 		b.buffer,
 		staging.buffer,
 		offset,
@@ -419,6 +423,8 @@ func (b *Buffer) closeNative(state *deviceState) {
 
 func (d *Device) copyBufferAndWait(
 	state *deviceState,
+	trackedBuffer *Buffer,
+	access submissionAccess,
 	source, destination vk.Buffer,
 	sourceOffset, destinationOffset, size uint64,
 	sourceStage, destinationStage vk.PipelineStageFlags,
@@ -432,7 +438,11 @@ func (d *Device) copyBufferAndWait(
 	if err != nil {
 		return err
 	}
-	defer state.ops.destroyCommandPool(state.deviceFns, state.device, pool)
+	defer func() {
+		if pool != 0 {
+			state.ops.destroyCommandPool(state.deviceFns, state.device, pool)
+		}
+	}()
 
 	allocation := vk.CommandBufferAllocateInfo{
 		SType:              vk.StructureTypeCommandBufferAllocateInfo,
@@ -473,19 +483,46 @@ func (d *Device) copyBufferAndWait(
 	if err != nil {
 		return err
 	}
-	defer state.ops.destroyFence(state.deviceFns, state.device, fence)
+	defer func() {
+		if fence != 0 {
+			state.ops.destroyFence(state.deviceFns, state.device, fence)
+		}
+	}()
 	submit := vk.SubmitInfo{
 		SType:              vk.StructureTypeSubmitInfo,
 		CommandBufferCount: 1,
 		PCommandBuffers:    &command,
 	}
 
-	d.queueMu.Lock()
-	defer d.queueMu.Unlock()
-	if err := state.ops.queueSubmit(state.deviceFns, state.queue, []vk.SubmitInfo{submit}, fence); err != nil {
+	submission := &transientSubmission{device: d, pool: pool, fence: fence}
+	pool = 0
+	fence = 0
+	submission.retainBufferLocked(trackedBuffer)
+	resources := submissionResources{{buffer: trackedBuffer, access: access}}
+	submission.reservation, err = d.acquireSubmission(resources)
+	if err != nil {
+		submission.releaseBufferLocked(trackedBuffer)
+		submission.cleanup(state)
 		return err
 	}
-	return state.ops.waitForFences(state.deviceFns, state.device, []vk.Fence{fence}, true, ^uint64(0))
+	if err := d.submitQueue(state, []vk.SubmitInfo{submit}, submission.fence); err != nil {
+		submission.releaseBufferLocked(trackedBuffer)
+		submission.cleanup(state)
+		return err
+	}
+	if err := state.ops.waitForFences(
+		state.deviceFns,
+		state.device,
+		[]vk.Fence{submission.fence},
+		true,
+		^uint64(0),
+	); err != nil {
+		d.retainUnknownTransientSubmission(submission, err)
+		return err
+	}
+	submission.releaseBufferLocked(trackedBuffer)
+	submission.cleanup(state)
+	return nil
 }
 
 func findMemoryType(properties vk.PhysicalDeviceMemoryProperties, typeBits uint32, required vk.MemoryPropertyFlags) (uint32, error) {

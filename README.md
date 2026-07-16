@@ -113,7 +113,9 @@ Bind concrete buffers with `Kernel.NewBindings`, upload raw bytes through the
 buffer, and call `Device.DispatchAndWait`. Use a `Recorder` to batch arbitrary
 recorded uploads and downloads, aligned inline updates, explicit compute
 barriers, and multiple dispatches into one blocking queue submission. The
-complete checked example is in `cmd/demo`.
+complete checked example is in `cmd/demo`. Compatible submissions from separate
+goroutines may remain in flight together: disjoint buffers and shared read-only
+buffers can overlap, while any overlapping write remains ordered.
 
 ## Commands
 

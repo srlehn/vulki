@@ -26,7 +26,8 @@ const (
 )
 
 // Recorder batches buffer updates, barriers, and dispatches into one queue
-// submission. A Recorder is not safe for concurrent method calls.
+// submission. A Recorder is not safe for concurrent method calls. Separate
+// recorders may submit concurrently when their buffer access is compatible.
 type Recorder struct {
 	mu          sync.Mutex
 	device      *Device
@@ -38,6 +39,8 @@ type Recorder struct {
 	buffers     []*Buffer
 	bindingSets []*BindingSet
 	transfers   []recorderTransfer
+	resources   submissionResources
+	reservation *submissionReservation
 }
 
 type recorderTransfer struct {
@@ -121,6 +124,7 @@ func (r *Recorder) Update(buffer *Buffer, offset uint64, data []byte) error {
 	}
 	handle := buffer.buffer
 	r.retainBufferLocked(buffer)
+	r.resources.add(buffer, submissionWrite)
 	buffer.mu.Unlock()
 	words := make([]uint32, len(data)/4)
 	aligned := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), len(data))
@@ -240,6 +244,7 @@ func (r *Recorder) Upload(buffer *Buffer, offset uint64, data []byte) error {
 		[]vk.BufferMemoryBarrier{post},
 	)
 	r.retainBufferLocked(buffer)
+	r.resources.add(buffer, submissionWrite)
 	r.transfers = append(r.transfers, recorderTransfer{resource: transfer, reusable: true})
 	keepTransfer = true
 	return nil
@@ -308,6 +313,7 @@ func (r *Recorder) Download(buffer *Buffer, offset uint64, destination []byte) e
 		[]vk.BufferMemoryBarrier{host},
 	)
 	r.retainBufferLocked(buffer)
+	r.resources.add(buffer, submissionRead)
 	r.transfers = append(r.transfers, recorderTransfer{
 		resource: transfer, destination: destination, reusable: true,
 	})
@@ -340,6 +346,8 @@ func (r *Recorder) Barrier(buffers ...*Buffer) error {
 		handle := buffer.buffer
 		r.retainBufferLocked(buffer)
 		buffer.mu.Unlock()
+		// The barrier orders accesses recorded elsewhere but does not itself
+		// read or write the buffer, so it does not change hazard classification.
 		barriers[index] = vk.BufferMemoryBarrier{
 			SType:               vk.StructureTypeBufferMemoryBarrier,
 			SrcAccessMask:       vk.AccessShaderReadBit | vk.AccessShaderWriteBit,
@@ -389,6 +397,7 @@ func (r *Recorder) Dispatch(kernel *Kernel, bindings *BindingSet, groups Workgro
 	}
 	defer r.device.endOperation()
 	r.retainBindingSet(bindings)
+	r.resources.merge(bindings.resources)
 	state.kernelOps.bindPipeline(state.deviceFns, r.command, vk.PipelineBindPointCompute, kernel.pipeline)
 	state.kernelOps.bindDescriptorSets(
 		state.deviceFns, r.command, vk.PipelineBindPointCompute,
@@ -427,20 +436,25 @@ func (r *Recorder) SubmitAndWait() error {
 		r.finish(state, recorderAborted, recorderRecycleTransfers)
 		return fmt.Errorf("vulki: create recorder fence: %w", err)
 	}
-	submit := vk.SubmitInfo{SType: vk.StructureTypeSubmitInfo, CommandBufferCount: 1, PCommandBuffers: &r.command}
-	r.device.queueMu.Lock()
-	err = state.ops.queueSubmit(state.deviceFns, state.queue, []vk.SubmitInfo{submit}, r.fence)
+	r.reservation, err = r.device.acquireSubmission(r.resources)
 	if err != nil {
-		r.device.queueMu.Unlock()
+		r.finish(state, recorderAborted, recorderRecycleTransfers)
+		return fmt.Errorf("vulki: reserve recorder resources: %w", err)
+	}
+	submit := vk.SubmitInfo{SType: vk.StructureTypeSubmitInfo, CommandBufferCount: 1, PCommandBuffers: &r.command}
+	err = r.device.submitQueue(state, []vk.SubmitInfo{submit}, r.fence)
+	if err != nil {
 		r.finish(state, recorderAborted, recorderRecycleTransfers)
 		return fmt.Errorf("vulki: submit recorder: %w", err)
 	}
 	r.state = recorderCompletionUnknown
 	err = state.ops.waitForFences(state.deviceFns, state.device, []vk.Fence{r.fence}, true, ^uint64(0))
-	r.device.queueMu.Unlock()
 	if err != nil {
+		r.device.markSubmissionUnknown(r.reservation, err)
 		return fmt.Errorf("vulki: wait for recorder completion: %w", err)
 	}
+	r.device.releaseSubmission(r.reservation)
+	r.reservation = nil
 	err = r.readDownloads(state)
 	r.finish(state, recorderSubmitted, recorderRecycleTransfers)
 	if err != nil {
@@ -528,6 +542,8 @@ func (r *Recorder) finish(state *deviceState, final recorderState, disposition r
 }
 
 func (r *Recorder) closeNative(state *deviceState, disposition recorderTransferDisposition) {
+	r.device.releaseSubmission(r.reservation)
+	r.reservation = nil
 	if r.fence != 0 {
 		state.ops.destroyFence(state.deviceFns, state.device, r.fence)
 		r.fence = 0
@@ -547,6 +563,7 @@ func (r *Recorder) closeNative(state *deviceState, disposition recorderTransferD
 		transfer.destination = nil
 	}
 	r.transfers = nil
+	r.resources = nil
 }
 
 func (r *Recorder) readDownloads(state *deviceState) error {

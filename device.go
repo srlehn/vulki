@@ -13,21 +13,27 @@ import (
 // Device owns a logical compute device and the resources created from it.
 // Its zero value is closed and safe to close again.
 type Device struct {
-	mu                sync.Mutex
-	cond              *sync.Cond
-	queueMu           sync.Mutex
-	transferMu        sync.Mutex
-	state             *deviceState
-	info              DeviceInfo
-	children          []childRecord
-	idleTransfers     [transferDirectionCount][]*transferResource
-	nextChild         uint64
-	idleTransferBytes uint64
-	closing           bool
-	closed            bool
-	closeDone         chan struct{}
-	closeErr          error
-	active            int
+	mu                          sync.Mutex
+	cond                        *sync.Cond
+	queueMu                     sync.Mutex
+	submissionMu                sync.Mutex
+	transferMu                  sync.Mutex
+	submissionCond              *sync.Cond
+	state                       *deviceState
+	info                        DeviceInfo
+	children                    []childRecord
+	pendingSubmissions          []*submissionReservation
+	activeSubmissions           []*submissionReservation
+	unknownTransientSubmissions []*transientSubmission
+	submissionErr               error
+	idleTransfers               [transferDirectionCount][]*transferResource
+	nextChild                   uint64
+	idleTransferBytes           uint64
+	closing                     bool
+	closed                      bool
+	closeDone                   chan struct{}
+	closeErr                    error
+	active                      int
 }
 
 // DeviceType identifies the broad class of a physical compute device.
@@ -349,6 +355,7 @@ func (d *Device) Close() error {
 		if err := state.waitIdle(); err != nil {
 			closeErrors = append(closeErrors, err)
 		}
+		d.cleanupUnknownTransientSubmissions(state)
 	}
 	for index := len(children) - 1; index >= 0; index-- {
 		if err := children[index].child.closeFromDevice(); err != nil {

@@ -75,6 +75,7 @@ type BindingSet struct {
 	set       vk.DescriptorSet
 	buffers   []*Buffer
 	handles   []vk.Buffer
+	resources submissionResources
 	recorders int
 	closed    bool
 }
@@ -298,6 +299,11 @@ func (k *Kernel) NewBindings(bindings ...BufferBinding) (*BindingSet, error) {
 		buffer.mu.Unlock()
 		set.buffers = append(set.buffers, buffer)
 		set.handles = append(set.handles, handle)
+		access := submissionRead
+		if k.layouts[binding.binding] == BufferReadWrite {
+			access = submissionWrite
+		}
+		set.resources.add(buffer, access)
 		nativeBuffers[index] = vk.DescriptorBufferInfo{Buffer: handle, Range: size}
 		writes[index] = vk.WriteDescriptorSet{
 			SType:           vk.StructureTypeWriteDescriptorSet,
@@ -362,25 +368,36 @@ func (d *Device) DispatchAndWait(kernel *Kernel, bindings *BindingSet, groups Wo
 		}
 	}
 
-	bindings.mu.Lock()
-	defer bindings.mu.Unlock()
-	if bindings.closed {
-		return fmt.Errorf("vulki: binding set is closed")
-	}
 	state, err := d.beginOperation()
 	if err != nil {
 		return err
 	}
 	defer d.endOperation()
+	bindings.mu.Lock()
+	if bindings.closed {
+		bindings.mu.Unlock()
+		return fmt.Errorf("vulki: binding set is closed")
+	}
+	submission := &transientSubmission{device: d}
+	submission.retainBindingsLocked(bindings)
+	handles := bindings.handles
+	resources := bindings.resources
+	set := bindings.set
+	bindings.mu.Unlock()
+	cleanupSubmission := true
+	defer func() {
+		if cleanupSubmission {
+			submission.cleanup(state)
+		}
+	}()
 
 	poolInfo := vk.CommandPoolCreateInfo{SType: vk.StructureTypeCommandPoolCreateInfo, QueueFamilyIndex: state.queueFamily}
-	pool, err := state.ops.createCommandPool(state.deviceFns, state.device, &poolInfo)
+	submission.pool, err = state.ops.createCommandPool(state.deviceFns, state.device, &poolInfo)
 	if err != nil {
 		return fmt.Errorf("vulki: create dispatch command pool: %w", err)
 	}
-	defer state.ops.destroyCommandPool(state.deviceFns, state.device, pool)
 	allocation := vk.CommandBufferAllocateInfo{
-		SType: vk.StructureTypeCommandBufferAllocateInfo, CommandPool: pool,
+		SType: vk.StructureTypeCommandBufferAllocateInfo, CommandPool: submission.pool,
 		Level: vk.CommandBufferLevelPrimary, CommandBufferCount: 1,
 	}
 	commands, err := state.ops.allocateCommandBuffers(state.deviceFns, state.device, &allocation)
@@ -392,8 +409,8 @@ func (d *Device) DispatchAndWait(kernel *Kernel, bindings *BindingSet, groups Wo
 	if err := state.ops.beginCommandBuffer(state.deviceFns, command, &begin); err != nil {
 		return fmt.Errorf("vulki: begin dispatch command buffer: %w", err)
 	}
-	barriers := make([]vk.BufferMemoryBarrier, len(bindings.handles))
-	for index, buffer := range bindings.handles {
+	barriers := make([]vk.BufferMemoryBarrier, len(handles))
+	for index, buffer := range handles {
 		barriers[index] = vk.BufferMemoryBarrier{
 			SType:               vk.StructureTypeBufferMemoryBarrier,
 			SrcAccessMask:       vk.AccessTransferWriteBit | vk.AccessShaderWriteBit,
@@ -411,25 +428,34 @@ func (d *Device) DispatchAndWait(kernel *Kernel, bindings *BindingSet, groups Wo
 	state.kernelOps.bindPipeline(state.deviceFns, command, vk.PipelineBindPointCompute, kernel.pipeline)
 	state.kernelOps.bindDescriptorSets(
 		state.deviceFns, command, vk.PipelineBindPointCompute,
-		kernel.pipelineLayout, 0, []vk.DescriptorSet{bindings.set},
+		kernel.pipelineLayout, 0, []vk.DescriptorSet{set},
 	)
 	state.kernelOps.dispatch(state.deviceFns, command, groups.X, groups.Y, groups.Z)
 	if err := state.ops.endCommandBuffer(state.deviceFns, command); err != nil {
 		return fmt.Errorf("vulki: end dispatch command buffer: %w", err)
 	}
 	fenceInfo := vk.FenceCreateInfo{SType: vk.StructureTypeFenceCreateInfo}
-	fence, err := state.ops.createFence(state.deviceFns, state.device, &fenceInfo)
+	submission.fence, err = state.ops.createFence(state.deviceFns, state.device, &fenceInfo)
 	if err != nil {
 		return fmt.Errorf("vulki: create dispatch fence: %w", err)
 	}
-	defer state.ops.destroyFence(state.deviceFns, state.device, fence)
+	submission.reservation, err = d.acquireSubmission(resources)
+	if err != nil {
+		return fmt.Errorf("vulki: reserve dispatch resources: %w", err)
+	}
 	submit := vk.SubmitInfo{SType: vk.StructureTypeSubmitInfo, CommandBufferCount: 1, PCommandBuffers: &command}
-	d.queueMu.Lock()
-	defer d.queueMu.Unlock()
-	if err := state.ops.queueSubmit(state.deviceFns, state.queue, []vk.SubmitInfo{submit}, fence); err != nil {
+	if err := d.submitQueue(state, []vk.SubmitInfo{submit}, submission.fence); err != nil {
 		return fmt.Errorf("vulki: submit dispatch: %w", err)
 	}
-	if err := state.ops.waitForFences(state.deviceFns, state.device, []vk.Fence{fence}, true, ^uint64(0)); err != nil {
+	if err := state.ops.waitForFences(
+		state.deviceFns,
+		state.device,
+		[]vk.Fence{submission.fence},
+		true,
+		^uint64(0),
+	); err != nil {
+		d.retainUnknownTransientSubmission(submission, err)
+		cleanupSubmission = false
 		return fmt.Errorf("vulki: wait for dispatch: %w", err)
 	}
 	return nil
@@ -499,6 +525,7 @@ func (set *BindingSet) releaseReferences() {
 	}
 	set.buffers = nil
 	set.handles = nil
+	set.resources = nil
 	if set.kernel != nil {
 		set.kernel.mu.Lock()
 		if set.kernel.bindingSets > 0 {

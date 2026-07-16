@@ -217,6 +217,56 @@ func TestNewBindingsCleansPoolAndReferences(t *testing.T) {
 	}
 }
 
+func TestNewBindingsTracksSubmissionAccess(t *testing.T) {
+	device, _, _ := fakeBufferDevice("")
+	var cleanup []string
+	device.state.kernelOps = fakeKernelOperations("", &cleanup)
+	kernel := &Kernel{
+		device:           device,
+		descriptorLayout: 2,
+		layouts: map[uint32]BufferAccess{
+			0: BufferReadOnly,
+			1: BufferReadWrite,
+		},
+	}
+	readBuffer, err := device.NewBuffer(4)
+	if err != nil {
+		t.Fatalf("new read buffer: %v", err)
+	}
+	writeBuffer, err := device.NewBuffer(4)
+	if err != nil {
+		t.Fatalf("new write buffer: %v", err)
+	}
+	bindings, err := kernel.NewBindings(
+		BindBuffer(1, writeBuffer),
+		BindBuffer(0, readBuffer),
+	)
+	if err != nil {
+		t.Fatalf("NewBindings: %v", err)
+	}
+	want := map[*Buffer]submissionAccess{
+		readBuffer:  submissionRead,
+		writeBuffer: submissionWrite,
+	}
+	if len(bindings.resources) != len(want) {
+		t.Fatalf("submission resources = %v, want %d entries", bindings.resources, len(want))
+	}
+	for _, resource := range bindings.resources {
+		if access, ok := want[resource.buffer]; !ok || resource.access != access {
+			t.Fatalf("submission resource = %#v, want accesses %v", resource, want)
+		}
+	}
+	if err := bindings.Close(); err != nil {
+		t.Fatalf("bindings Close: %v", err)
+	}
+	if err := readBuffer.Close(); err != nil {
+		t.Fatalf("read buffer Close: %v", err)
+	}
+	if err := writeBuffer.Close(); err != nil {
+		t.Fatalf("write buffer Close: %v", err)
+	}
+}
+
 func TestDispatchRejectsInvalidResourcesAndWorkgroups(t *testing.T) {
 	first, _, _ := fakeBufferDevice("")
 	second, _, _ := fakeBufferDevice("")
@@ -231,6 +281,74 @@ func TestDispatchRejectsInvalidResourcesAndWorkgroups(t *testing.T) {
 	first.info.Limits.MaxComputeWorkGroupCount = [3]uint32{1, 1, 1}
 	if err := first.DispatchAndWait(kernel, bindings, Workgroups{X: 2, Y: 1, Z: 1}); err == nil {
 		t.Fatal("oversized dispatch succeeded")
+	}
+}
+
+func TestDispatchWaitFailureRetainsBindingsUntilDeviceClose(t *testing.T) {
+	waitErr := errors.New("injected dispatch wait failure")
+	device, _, _ := fakeBufferDevice("")
+	buffer := &Buffer{device: device, references: 1}
+	kernel := &Kernel{device: device, pipeline: 3, pipelineLayout: 4, bindingSets: 1}
+	bindings := &BindingSet{
+		device:    device,
+		kernel:    kernel,
+		set:       5,
+		buffers:   []*Buffer{buffer},
+		handles:   []vk.Buffer{6},
+		resources: submissionResources{{buffer: buffer, access: submissionRead}},
+	}
+	var err error
+	bindings.childID, err = device.addChild(bindings)
+	if err != nil {
+		t.Fatalf("add binding set: %v", err)
+	}
+	device.state.ops.createCommandPool = func(*vk.DeviceFuncs, vk.Device, *vk.CommandPoolCreateInfo) (vk.CommandPool, error) {
+		return 20, nil
+	}
+	device.state.ops.allocateCommandBuffers = func(*vk.DeviceFuncs, vk.Device, *vk.CommandBufferAllocateInfo) ([]vk.CommandBuffer, error) {
+		return []vk.CommandBuffer{21}, nil
+	}
+	device.state.ops.beginCommandBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer, *vk.CommandBufferBeginInfo) error { return nil }
+	device.state.ops.bufferBarriers = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.PipelineStageFlags, []vk.BufferMemoryBarrier) {
+	}
+	device.state.ops.endCommandBuffer = func(*vk.DeviceFuncs, vk.CommandBuffer) error { return nil }
+	device.state.kernelOps.bindPipeline = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineBindPoint, vk.Pipeline) {}
+	device.state.kernelOps.bindDescriptorSets = func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineBindPoint, vk.PipelineLayout, uint32, []vk.DescriptorSet) {
+	}
+	device.state.kernelOps.dispatch = func(*vk.DeviceFuncs, vk.CommandBuffer, uint32, uint32, uint32) {}
+	device.state.ops.createFence = func(*vk.DeviceFuncs, vk.Device, *vk.FenceCreateInfo) (vk.Fence, error) {
+		return 22, nil
+	}
+	destroyedPools := 0
+	destroyedFences := 0
+	device.state.ops.destroyCommandPool = func(*vk.DeviceFuncs, vk.Device, vk.CommandPool) { destroyedPools++ }
+	device.state.ops.destroyFence = func(*vk.DeviceFuncs, vk.Device, vk.Fence) { destroyedFences++ }
+	device.state.ops.queueSubmit = func(*vk.DeviceFuncs, vk.Queue, []vk.SubmitInfo, vk.Fence) error { return nil }
+	device.state.ops.waitForFences = func(*vk.DeviceFuncs, vk.Device, []vk.Fence, bool, uint64) error {
+		return waitErr
+	}
+	device.state.deviceFns = &vk.DeviceFuncs{}
+	device.state.hooks.deviceWaitIdle = func(*vk.DeviceFuncs, vk.Device) error { return nil }
+	device.state.hooks.destroyDevice = func(*vk.DeviceFuncs, vk.Device) {}
+
+	if err := device.DispatchAndWait(kernel, bindings, Workgroups{X: 1, Y: 1, Z: 1}); !errors.Is(err, waitErr) {
+		t.Fatalf("DispatchAndWait error = %v, want wait failure", err)
+	}
+	if destroyedPools != 0 || destroyedFences != 0 {
+		t.Fatalf("dispatch resources destroyed early: pools=%d fences=%d", destroyedPools, destroyedFences)
+	}
+	if err := bindings.Close(); err == nil {
+		t.Fatal("binding set closed while dispatch completion was unknown")
+	}
+	if err := device.Close(); err != nil {
+		t.Fatalf("Device.Close: %v", err)
+	}
+	if destroyedPools != 1 || destroyedFences != 1 {
+		t.Fatalf("dispatch cleanup counts: pools=%d fences=%d, want 1 each", destroyedPools, destroyedFences)
+	}
+	if bindings.recorders != 0 || buffer.references != 0 || kernel.bindingSets != 0 {
+		t.Fatalf("references after close: recorders=%d buffer=%d kernel=%d",
+			bindings.recorders, buffer.references, kernel.bindingSets)
 	}
 }
 
