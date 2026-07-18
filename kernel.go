@@ -87,7 +87,7 @@ type kernelOps struct {
 	destroyDescriptorLayout func(*vk.DeviceFuncs, vk.Device, vk.DescriptorSetLayout)
 	createPipelineLayout    func(*vk.DeviceFuncs, vk.Device, *vk.PipelineLayoutCreateInfo) (vk.PipelineLayout, error)
 	destroyPipelineLayout   func(*vk.DeviceFuncs, vk.Device, vk.PipelineLayout)
-	createComputePipelines  func(*vk.DeviceFuncs, vk.Device, []vk.ComputePipelineCreateInfo) ([]vk.Pipeline, error)
+	createComputePipelines  func(*vk.DeviceFuncs, vk.Device, vk.PipelineCache, []vk.ComputePipelineCreateInfo) ([]vk.Pipeline, error)
 	destroyPipeline         func(*vk.DeviceFuncs, vk.Device, vk.Pipeline)
 	createDescriptorPool    func(*vk.DeviceFuncs, vk.Device, *vk.DescriptorPoolCreateInfo) (vk.DescriptorPool, error)
 	destroyDescriptorPool   func(*vk.DeviceFuncs, vk.Device, vk.DescriptorPool)
@@ -117,8 +117,8 @@ var directKernelOps = kernelOps{
 	destroyPipelineLayout: func(functions *vk.DeviceFuncs, device vk.Device, layout vk.PipelineLayout) {
 		functions.DestroyPipelineLayout(device, layout)
 	},
-	createComputePipelines: func(functions *vk.DeviceFuncs, device vk.Device, infos []vk.ComputePipelineCreateInfo) ([]vk.Pipeline, error) {
-		return functions.CreateComputePipelines(device, infos)
+	createComputePipelines: func(functions *vk.DeviceFuncs, device vk.Device, cache vk.PipelineCache, infos []vk.ComputePipelineCreateInfo) ([]vk.Pipeline, error) {
+		return functions.CreateComputePipelinesWithCache(device, cache, infos)
 	},
 	destroyPipeline: func(functions *vk.DeviceFuncs, device vk.Device, pipeline vk.Pipeline) {
 		functions.DestroyPipeline(device, pipeline)
@@ -229,7 +229,7 @@ func (d *Device) NewKernel(options KernelOptions) (*Kernel, error) {
 		Module: kernel.shaderModule,
 		PName:  entryName,
 	}
-	pipelines, err := state.kernelOps.createComputePipelines(state.deviceFns, state.device, []vk.ComputePipelineCreateInfo{{
+	pipelines, err := state.kernelOps.createComputePipelines(state.deviceFns, state.device, state.pipelineCache.handle(), []vk.ComputePipelineCreateInfo{{
 		SType:  vk.StructureTypeComputePipelineCreateInfo,
 		Stage:  stage,
 		Layout: kernel.pipelineLayout,
@@ -239,6 +239,7 @@ func (d *Device) NewKernel(options KernelOptions) (*Kernel, error) {
 		return nil, fmt.Errorf("vulki: create compute pipeline: %w", err)
 	}
 	kernel.pipeline = pipelines[0]
+	state.pipelineCache.persist(state.deviceFns, state.device)
 	kernel.childID, err = d.addChild(kernel)
 	if err != nil {
 		kernel.closeNative(state)

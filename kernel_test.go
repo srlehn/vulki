@@ -400,7 +400,7 @@ func fakeKernelOperations(failure string, cleanup *[]string) kernelOps {
 		destroyPipelineLayout: func(_ *vk.DeviceFuncs, _ vk.Device, handle vk.PipelineLayout) {
 			*cleanup = append(*cleanup, fmt.Sprintf("layout:%d", handle))
 		},
-		createComputePipelines: func(*vk.DeviceFuncs, vk.Device, []vk.ComputePipelineCreateInfo) ([]vk.Pipeline, error) {
+		createComputePipelines: func(*vk.DeviceFuncs, vk.Device, vk.PipelineCache, []vk.ComputePipelineCreateInfo) ([]vk.Pipeline, error) {
 			if failure == "pipeline" {
 				return nil, fail("pipeline")
 			}

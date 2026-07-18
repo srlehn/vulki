@@ -123,6 +123,21 @@ Failures keep their Vulkan cause inspectable with `errors.Is`:
 that refuses further submissions after a failed fence wait. `Device.Err`
 reports that unavailable state and its cause.
 
+### Pipeline cache
+
+`Open` creates one application-managed Vulkan pipeline cache per device and
+`NewKernel` persists it after each successful pipeline creation. This is
+enabled by default so compiled pipelines can be reused by later processes and
+by differently named executables. The default file is
+`os.UserCacheDir()/vulki/pipeline-<pipelineCacheUUID>.bin`.
+
+Set `VULKI_PIPELINE_CACHE=off` to disable both the in-memory cache and disk
+persistence. Set `VULKI_PIPELINE_CACHE_PATH` to an exact file path to override
+the default location. Cache files are device- and driver-specific opaque data;
+Vulki validates their standard header before use. Missing, corrupt, mismatched,
+unreadable, or unwritable files are ignored, so cache failures do not change
+the result of `Open` or `NewKernel`.
+
 ## Commands
 
 Run the WGSL compute demo, which doubles 256 `float32` values and verifies the

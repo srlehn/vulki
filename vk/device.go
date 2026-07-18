@@ -24,7 +24,10 @@ type DeviceFuncs struct {
 	destroyDescriptorSetLayout   func(device Device, layout DescriptorSetLayout, pAllocator uintptr)
 	createPipelineLayout         func(device Device, pCreateInfo *PipelineLayoutCreateInfo, pAllocator uintptr, pLayout *PipelineLayout) Result
 	destroyPipelineLayout        func(device Device, layout PipelineLayout, pAllocator uintptr)
-	createComputePipelines       func(device Device, pipelineCache uintptr, createInfoCount uint32, pCreateInfos *ComputePipelineCreateInfo, pAllocator uintptr, pPipelines *Pipeline) Result
+	createPipelineCache          func(device Device, pCreateInfo *PipelineCacheCreateInfo, pAllocator uintptr, pPipelineCache *PipelineCache) Result
+	destroyPipelineCache         func(device Device, pipelineCache PipelineCache, pAllocator uintptr)
+	getPipelineCacheData         func(device Device, pipelineCache PipelineCache, pDataSize *uintptr, pData unsafe.Pointer) Result
+	createComputePipelines       func(device Device, pipelineCache PipelineCache, createInfoCount uint32, pCreateInfos *ComputePipelineCreateInfo, pAllocator uintptr, pPipelines *Pipeline) Result
 	destroyPipeline              func(device Device, pipeline Pipeline, pAllocator uintptr)
 	createDescriptorPool         func(device Device, pCreateInfo *DescriptorPoolCreateInfo, pAllocator uintptr, pPool *DescriptorPool) Result
 	destroyDescriptorPool        func(device Device, pool DescriptorPool, pAllocator uintptr)
@@ -104,6 +107,9 @@ func loadDeviceFuncs(instFuncs *InstanceFuncs, device Device, register func(any,
 		{&f.destroyDescriptorSetLayout, "vkDestroyDescriptorSetLayout"},
 		{&f.createPipelineLayout, "vkCreatePipelineLayout"},
 		{&f.destroyPipelineLayout, "vkDestroyPipelineLayout"},
+		{&f.createPipelineCache, "vkCreatePipelineCache"},
+		{&f.destroyPipelineCache, "vkDestroyPipelineCache"},
+		{&f.getPipelineCacheData, "vkGetPipelineCacheData"},
 		{&f.createComputePipelines, "vkCreateComputePipelines"},
 		{&f.destroyPipeline, "vkDestroyPipeline"},
 		{&f.createDescriptorPool, "vkCreateDescriptorPool"},
@@ -278,9 +284,65 @@ func (f *DeviceFuncs) DestroyPipelineLayout(device Device, layout PipelineLayout
 	f.destroyPipelineLayout(device, layout, 0)
 }
 
+// CreatePipelineCache creates a pipeline cache with nil allocation callbacks.
+// The caller owns the returned cache and must destroy it before destroying
+// device.
+func (f *DeviceFuncs) CreatePipelineCache(device Device, info *PipelineCacheCreateInfo) (PipelineCache, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreatePipelineCache requires create info")
+	}
+	if f == nil || f.createPipelineCache == nil {
+		return 0, fmt.Errorf("vk: device functions are not loaded")
+	}
+	var cache PipelineCache
+	res := f.createPipelineCache(device, info, 0, &cache)
+	if res != Success {
+		return 0, resultError("vkCreatePipelineCache", res)
+	}
+	return cache, nil
+}
+
+// DestroyPipelineCache destroys a pipeline cache created from device. A null
+// cache is ignored.
+func (f *DeviceFuncs) DestroyPipelineCache(device Device, cache PipelineCache) {
+	if f == nil || f.destroyPipelineCache == nil || cache == 0 {
+		return
+	}
+	f.destroyPipelineCache(device, cache, 0)
+}
+
+// GetPipelineCacheData queries or copies opaque pipeline-cache data. A nil
+// data slice performs the size query. The returned size is the driver-written
+// pDataSize value, including when the result is VK_INCOMPLETE.
+func (f *DeviceFuncs) GetPipelineCacheData(device Device, cache PipelineCache, data []byte) (uintptr, error) {
+	if f == nil || f.getPipelineCacheData == nil {
+		return 0, fmt.Errorf("vk: device functions are not loaded")
+	}
+	if cache == 0 {
+		return 0, fmt.Errorf("vk: vkGetPipelineCacheData requires a pipeline cache")
+	}
+	size := uintptr(len(data))
+	var pointer unsafe.Pointer
+	if len(data) > 0 {
+		pointer = unsafe.Pointer(&data[0])
+	}
+	res := f.getPipelineCacheData(device, cache, &size, pointer)
+	if res != Success {
+		return size, resultError("vkGetPipelineCacheData", res)
+	}
+	return size, nil
+}
+
 // CreateComputePipelines creates compute pipelines without a pipeline cache or
 // allocation callbacks. It destroys every non-null result if creation fails.
 func (f *DeviceFuncs) CreateComputePipelines(device Device, infos []ComputePipelineCreateInfo) ([]Pipeline, error) {
+	return f.CreateComputePipelinesWithCache(device, 0, infos)
+}
+
+// CreateComputePipelinesWithCache creates compute pipelines using cache and
+// nil allocation callbacks. It destroys every non-null result if creation
+// fails. A null cache is valid and disables application-managed cache reuse.
+func (f *DeviceFuncs) CreateComputePipelinesWithCache(device Device, cache PipelineCache, infos []ComputePipelineCreateInfo) ([]Pipeline, error) {
 	if f == nil || f.createComputePipelines == nil || f.destroyPipeline == nil {
 		return nil, fmt.Errorf("vk: device functions are not loaded")
 	}
@@ -288,7 +350,7 @@ func (f *DeviceFuncs) CreateComputePipelines(device Device, infos []ComputePipel
 		return nil, fmt.Errorf("vkCreateComputePipelines requires at least one create info")
 	}
 	pipelines := make([]Pipeline, len(infos))
-	res := f.createComputePipelines(device, 0, uint32(len(infos)), &infos[0], 0, &pipelines[0])
+	res := f.createComputePipelines(device, cache, uint32(len(infos)), &infos[0], 0, &pipelines[0])
 	if res != Success {
 		for _, pipeline := range pipelines {
 			if pipeline != 0 {

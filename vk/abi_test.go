@@ -13,6 +13,7 @@ func TestCoreStructABI64(t *testing.T) {
 	testStructSize(t, "ApplicationInfo", unsafe.Sizeof(ApplicationInfo{}), 48)
 	testStructSize(t, "InstanceCreateInfo", unsafe.Sizeof(InstanceCreateInfo{}), 64)
 	testStructSize(t, "BufferCreateInfo", unsafe.Sizeof(BufferCreateInfo{}), 56)
+	testStructSize(t, "PipelineCacheCreateInfo", unsafe.Sizeof(PipelineCacheCreateInfo{}), 40)
 	testStructSize(t, "PipelineShaderStageCreateInfo", unsafe.Sizeof(PipelineShaderStageCreateInfo{}), 48)
 	testStructSize(t, "ComputePipelineCreateInfo", unsafe.Sizeof(ComputePipelineCreateInfo{}), 96)
 	testStructSize(t, "WriteDescriptorSet", unsafe.Sizeof(WriteDescriptorSet{}), 64)
@@ -32,6 +33,7 @@ func TestCoreHandleABI64(t *testing.T) {
 	testStructSize(t, "Device", unsafe.Sizeof(Device(0)), 8)
 	testStructSize(t, "Buffer", unsafe.Sizeof(Buffer(0)), 8)
 	testStructSize(t, "DeviceMemory", unsafe.Sizeof(DeviceMemory(0)), 8)
+	testStructSize(t, "PipelineCache", unsafe.Sizeof(PipelineCache(0)), 8)
 	testStructSize(t, "Pipeline", unsafe.Sizeof(Pipeline(0)), 8)
 	if got := unsafe.Alignof(PhysicalDeviceLimits{}); got != 8 {
 		t.Fatalf("alignof(PhysicalDeviceLimits) = %d, want 8", got)
@@ -39,6 +41,18 @@ func TestCoreHandleABI64(t *testing.T) {
 	if got := unsafe.Alignof(PhysicalDeviceProperties{}); got != 8 {
 		t.Fatalf("alignof(PhysicalDeviceProperties) = %d, want 8", got)
 	}
+}
+
+func TestPipelineCacheCreateInfoOffsets64(t *testing.T) {
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		t.Skip("vk supports only 64-bit targets")
+	}
+
+	info := PipelineCacheCreateInfo{}
+	testFieldOffset(t, "PipelineCacheCreateInfo.PNext", unsafe.Offsetof(info.PNext), 8)
+	testFieldOffset(t, "PipelineCacheCreateInfo.Flags", unsafe.Offsetof(info.Flags), 16)
+	testFieldOffset(t, "PipelineCacheCreateInfo.InitialDataSize", unsafe.Offsetof(info.InitialDataSize), 24)
+	testFieldOffset(t, "PipelineCacheCreateInfo.PInitialData", unsafe.Offsetof(info.PInitialData), 32)
 }
 
 func TestPhysicalDevicePropertiesOffsets64(t *testing.T) {

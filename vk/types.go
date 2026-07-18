@@ -16,6 +16,7 @@ type (
 	Buffer              uintptr
 	DeviceMemory        uintptr
 	ShaderModule        uintptr
+	PipelineCache       uintptr
 	PipelineLayout      uintptr
 	Pipeline            uintptr
 	DescriptorSetLayout uintptr
@@ -142,6 +143,7 @@ const (
 	StructureTypeFenceCreateInfo               StructureType = 8
 	StructureTypeBufferCreateInfo              StructureType = 12
 	StructureTypeShaderModuleCreateInfo        StructureType = 16
+	StructureTypePipelineCacheCreateInfo       StructureType = 17
 	StructureTypeComputePipelineCreateInfo     StructureType = 29
 	StructureTypePipelineShaderStageCreateInfo StructureType = 18
 	StructureTypePipelineLayoutCreateInfo      StructureType = 30
@@ -337,6 +339,15 @@ type ShaderModuleCreateInfo struct {
 	Flags    uint32
 	CodeSize uintptr
 	PCode    unsafe.Pointer
+}
+
+// PipelineCacheCreateInfo mirrors VkPipelineCacheCreateInfo.
+type PipelineCacheCreateInfo struct {
+	SType           StructureType
+	PNext           uintptr
+	Flags           uint32
+	InitialDataSize uintptr
+	PInitialData    unsafe.Pointer
 }
 
 // DescriptorSetLayoutBinding mirrors VkDescriptorSetLayoutBinding.

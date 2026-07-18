@@ -101,6 +101,7 @@ type deviceState struct {
 	queueFamily         uint32
 	memory              vk.PhysicalDeviceMemoryProperties
 	nonCoherentAtomSize uint64
+	pipelineCache       *pipelineCacheState
 	ops                 deviceOps
 	kernelOps           kernelOps
 }
@@ -178,10 +179,17 @@ var directVulkanHooks = openHooks{
 // creates one logical compute device. The caller must close the returned
 // Device.
 func Open() (*Device, error) {
-	return openWithHooks(directVulkanHooks)
+	return openWithHooksAndPipelineCache(directVulkanHooks, openDefaultPipelineCache)
 }
 
 func openWithHooks(hooks openHooks) (_ *Device, err error) {
+	return openWithHooksAndPipelineCache(hooks, nil)
+}
+
+func openWithHooksAndPipelineCache(
+	hooks openHooks,
+	cacheFactory pipelineCacheFactory,
+) (_ *Device, err error) {
 	state := &deviceState{hooks: hooks, ops: directDeviceOps, kernelOps: directKernelOps}
 	complete := false
 	defer func() {
@@ -286,6 +294,9 @@ func openWithHooks(hooks openHooks) (_ *Device, err error) {
 	state.memory = hooks.memoryProperties(state.instanceFns, state.physical)
 	properties := hooks.deviceProperties(state.instanceFns, state.physical)
 	state.nonCoherentAtomSize = properties.Limits.NonCoherentAtomSize
+	if cacheFactory != nil {
+		state.pipelineCache = cacheFactory(state.deviceFns, state.device, properties)
+	}
 
 	device := &Device{
 		state:     state,
@@ -478,6 +489,8 @@ func (state *deviceState) release() {
 		return
 	}
 	if state.device != 0 {
+		state.pipelineCache.close(state.deviceFns, state.device)
+		state.pipelineCache = nil
 		state.hooks.destroyDevice(state.deviceFns, state.device)
 		state.device = 0
 		state.deviceFns = nil

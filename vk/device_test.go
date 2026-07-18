@@ -55,6 +55,14 @@ func TestDeviceCreateWrappersRejectNilInfo(t *testing.T) {
 			op: "vkCreatePipelineLayout",
 		},
 		{
+			name: "pipeline cache",
+			call: func() error {
+				_, err := functions.CreatePipelineCache(Device(1), nil)
+				return err
+			},
+			op: "vkCreatePipelineCache",
+		},
+		{
 			name: "descriptor pool",
 			call: func() error {
 				_, err := functions.CreateDescriptorPool(Device(1), nil)
@@ -99,8 +107,10 @@ func TestDeviceCreateWrappersRejectNilInfo(t *testing.T) {
 
 func TestCreateComputePipelinesCleansPartialFailure(t *testing.T) {
 	var destroyed []Pipeline
+	var gotCache PipelineCache
 	functions := &DeviceFuncs{
-		createComputePipelines: func(_ Device, _ uintptr, count uint32, _ *ComputePipelineCreateInfo, _ uintptr, pipelines *Pipeline) Result {
+		createComputePipelines: func(_ Device, cache PipelineCache, count uint32, _ *ComputePipelineCreateInfo, _ uintptr, pipelines *Pipeline) Result {
+			gotCache = cache
 			results := unsafe.Slice(pipelines, count)
 			results[0] = Pipeline(11)
 			results[2] = Pipeline(33)
@@ -111,8 +121,9 @@ func TestCreateComputePipelinesCleansPartialFailure(t *testing.T) {
 		},
 	}
 
-	pipelines, err := functions.CreateComputePipelines(
+	pipelines, err := functions.CreateComputePipelinesWithCache(
 		Device(1),
+		PipelineCache(7),
 		make([]ComputePipelineCreateInfo, 3),
 	)
 	if pipelines != nil {
@@ -124,6 +135,76 @@ func TestCreateComputePipelinesCleansPartialFailure(t *testing.T) {
 	}
 	if len(destroyed) != 2 || destroyed[0] != 11 || destroyed[1] != 33 {
 		t.Fatalf("destroyed = %v, want [11 33]", destroyed)
+	}
+	if gotCache != PipelineCache(7) {
+		t.Fatalf("pipeline cache = %d, want 7", gotCache)
+	}
+}
+
+func TestPipelineCacheWrappers(t *testing.T) {
+	initial := []byte{1, 2, 3}
+	var destroyed PipelineCache
+	functions := &DeviceFuncs{
+		createPipelineCache: func(_ Device, info *PipelineCacheCreateInfo, allocator uintptr, cache *PipelineCache) Result {
+			if allocator != 0 || info.InitialDataSize != uintptr(len(initial)) || info.PInitialData != unsafe.Pointer(&initial[0]) {
+				t.Fatalf("create info = %#v, allocator = %d", info, allocator)
+			}
+			*cache = PipelineCache(19)
+			return Success
+		},
+		destroyPipelineCache: func(_ Device, cache PipelineCache, allocator uintptr) {
+			if allocator != 0 {
+				t.Fatalf("destroy allocator = %d, want 0", allocator)
+			}
+			destroyed = cache
+		},
+	}
+	info := &PipelineCacheCreateInfo{
+		SType:           StructureTypePipelineCacheCreateInfo,
+		InitialDataSize: uintptr(len(initial)),
+		PInitialData:    unsafe.Pointer(&initial[0]),
+	}
+	cache, err := functions.CreatePipelineCache(Device(1), info)
+	if err != nil {
+		t.Fatalf("CreatePipelineCache: %v", err)
+	}
+	if cache != PipelineCache(19) {
+		t.Fatalf("cache = %d, want 19", cache)
+	}
+	functions.DestroyPipelineCache(Device(1), cache)
+	if destroyed != cache {
+		t.Fatalf("destroyed = %d, want %d", destroyed, cache)
+	}
+}
+
+func TestGetPipelineCacheDataReportsSizeAndIncomplete(t *testing.T) {
+	payload := []byte{1, 2, 3, 4, 5}
+	functions := &DeviceFuncs{
+		getPipelineCacheData: func(_ Device, cache PipelineCache, size *uintptr, data unsafe.Pointer) Result {
+			if cache != PipelineCache(9) {
+				t.Fatalf("cache = %d, want 9", cache)
+			}
+			if data == nil {
+				*size = uintptr(len(payload))
+				return Success
+			}
+			buffer := unsafe.Slice((*byte)(data), int(*size))
+			copy(buffer, payload)
+			*size = uintptr(len(buffer))
+			return Incomplete
+		},
+	}
+	size, err := functions.GetPipelineCacheData(Device(1), PipelineCache(9), nil)
+	if err != nil || size != uintptr(len(payload)) {
+		t.Fatalf("size query = %d, %v, want %d, nil", size, err, len(payload))
+	}
+	written, err := functions.GetPipelineCacheData(Device(1), PipelineCache(9), make([]byte, 3))
+	var vkErr *Error
+	if !errors.As(err, &vkErr) || vkErr.Result != Incomplete {
+		t.Fatalf("data query error = %v, want VK_INCOMPLETE", err)
+	}
+	if written != 3 {
+		t.Fatalf("written = %d, want 3", written)
 	}
 }
 
