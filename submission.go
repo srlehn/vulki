@@ -172,6 +172,231 @@ func (d *Device) submitQueue(
 	return classifyDeviceError(state.ops.queueSubmit(state.deviceFns, state.queue, submits, fence))
 }
 
+type submissionState uint8
+
+const (
+	submissionPending submissionState = iota + 1
+	submissionUnknown
+	submissionDone
+)
+
+// Submission tracks one in-flight queue submission created by Recorder.Submit
+// or Device.Submit. Completion must be observed through Wait or Poll before
+// recorded download destinations are valid. Wait and Poll are safe for
+// concurrent use; once completion is observed the result is final and repeated
+// calls return it unchanged. A Submission that is never observed keeps its
+// resources retained until the Device is closed.
+type Submission struct {
+	mu          sync.Mutex
+	device      *Device
+	childID     uint64
+	fence       vk.Fence
+	reservation *submissionReservation
+	recorders   []*Recorder
+	state       submissionState
+	result      error
+}
+
+// Submit ends recording on every recorder and submits all recorded batches in
+// argument order as one queue submission, without waiting for completion.
+// Batches execute in submission order on the shared queue, observing the
+// barriers they recorded. On success the recorders accept no further commands
+// and the returned Submission owns completion tracking. On error every
+// recorder is aborted and its resources are released.
+//
+// Each recorder must belong to this device, appear only once, and not be used
+// concurrently by another goroutine, as documented on Recorder.
+func (d *Device) Submit(recorders ...*Recorder) (*Submission, error) {
+	if len(recorders) == 0 {
+		return nil, fmt.Errorf("vulki: submit requires at least one recorder")
+	}
+	for index, recorder := range recorders {
+		if recorder == nil || recorder.device != d {
+			return nil, fmt.Errorf("vulki: submit recorder %d does not belong to this device", index)
+		}
+		for _, earlier := range recorders[:index] {
+			if earlier == recorder {
+				return nil, fmt.Errorf("vulki: submit recorder %d is duplicated", index)
+			}
+		}
+	}
+	state, err := d.beginOperation()
+	if err != nil {
+		return nil, err
+	}
+	defer d.endOperation()
+	for _, recorder := range recorders {
+		recorder.mu.Lock()
+	}
+	defer func() {
+		for _, recorder := range recorders {
+			recorder.mu.Unlock()
+		}
+	}()
+	for _, recorder := range recorders {
+		if err := recorder.requireRecording(); err != nil {
+			return nil, err
+		}
+	}
+	abortAll := func() {
+		for _, recorder := range recorders {
+			recorder.finish(state, recorderAborted, recorderRecycleTransfers)
+		}
+	}
+	for _, recorder := range recorders {
+		if err := state.ops.endCommandBuffer(state.deviceFns, recorder.command); err != nil {
+			abortAll()
+			return nil, fmt.Errorf("vulki: end recorder command buffer: %w", err)
+		}
+	}
+	fenceInfo := vk.FenceCreateInfo{SType: vk.StructureTypeFenceCreateInfo}
+	fence, err := state.ops.createFence(state.deviceFns, state.device, &fenceInfo)
+	if err != nil {
+		abortAll()
+		return nil, fmt.Errorf("vulki: create submission fence: %w", err)
+	}
+	var merged submissionResources
+	for _, recorder := range recorders {
+		merged.merge(recorder.resources)
+	}
+	reservation, err := d.acquireSubmission(merged)
+	if err != nil {
+		state.ops.destroyFence(state.deviceFns, state.device, fence)
+		abortAll()
+		return nil, fmt.Errorf("vulki: reserve submission resources: %w", err)
+	}
+	commands := make([]vk.CommandBuffer, len(recorders))
+	for index, recorder := range recorders {
+		commands[index] = recorder.command
+	}
+	submit := vk.SubmitInfo{
+		SType:              vk.StructureTypeSubmitInfo,
+		CommandBufferCount: uint32(len(commands)),
+		PCommandBuffers:    &commands[0],
+	}
+	if err := d.submitQueue(state, []vk.SubmitInfo{submit}, fence); err != nil {
+		d.releaseSubmission(reservation)
+		state.ops.destroyFence(state.deviceFns, state.device, fence)
+		abortAll()
+		return nil, fmt.Errorf("vulki: submit recorders: %w", err)
+	}
+	for _, recorder := range recorders {
+		recorder.state = recorderCompletionUnknown
+	}
+	submission := &Submission{
+		device:      d,
+		fence:       fence,
+		reservation: reservation,
+		recorders:   append([]*Recorder(nil), recorders...),
+		state:       submissionPending,
+	}
+	submission.childID, err = d.addChild(submission)
+	if err != nil {
+		// The batch is already on the queue and can no longer be tracked, so
+		// retain the fence and reservation until device-idle cleanup.
+		d.retainUnknownTransientSubmission(&transientSubmission{
+			device:      d,
+			fence:       fence,
+			reservation: reservation,
+		}, err)
+		return nil, err
+	}
+	return submission, nil
+}
+
+// Wait blocks until the submission completes, fills recorded download
+// destinations, releases the submitted recorders, and returns the submission
+// result. If completion cannot be established, the affected resources remain
+// retained until the Device is closed and later submissions are refused.
+func (s *Submission) Wait() error {
+	_, err := s.observe(true)
+	return err
+}
+
+// Poll reports whether the submission has completed, without blocking. When it
+// returns true the submission result is final and recorded download
+// destinations are filled.
+func (s *Submission) Poll() (bool, error) {
+	return s.observe(false)
+}
+
+func (s *Submission) observe(block bool) (bool, error) {
+	if s == nil {
+		return false, fmt.Errorf("vulki: submission is not tracked")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == submissionDone || s.state == submissionUnknown {
+		return true, s.result
+	}
+	state, err := s.device.beginOperation()
+	if err != nil {
+		return false, err
+	}
+	defer s.device.endOperation()
+	timeout := uint64(0)
+	if block {
+		timeout = ^uint64(0)
+	}
+	err = state.ops.waitForFences(state.deviceFns, state.device, []vk.Fence{s.fence}, true, timeout)
+	if err != nil {
+		var vkErr *vk.Error
+		if !block && errors.As(err, &vkErr) &&
+			(vkErr.Result == vk.Timeout || vkErr.Result == vk.NotReady) {
+			return false, nil
+		}
+		err = classifyDeviceError(err)
+		s.device.markSubmissionUnknown(s.reservation, err)
+		s.state = submissionUnknown
+		s.result = fmt.Errorf("vulki: wait for submission completion: %w", err)
+		return true, s.result
+	}
+	s.device.releaseSubmission(s.reservation)
+	s.reservation = nil
+	var firstErr error
+	for _, recorder := range s.recorders {
+		if err := recorder.completeSubmitted(state); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.recorders = nil
+	state.ops.destroyFence(state.deviceFns, state.device, s.fence)
+	s.fence = 0
+	s.state = submissionDone
+	s.result = firstErr
+	s.device.removeChild(s.childID)
+	return true, firstErr
+}
+
+func (s *Submission) closeFromDevice() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == submissionDone {
+		return nil
+	}
+	s.device.mu.Lock()
+	state := s.device.state
+	s.device.mu.Unlock()
+	if state == nil {
+		return fmt.Errorf("vulki: submission owner is closed")
+	}
+	s.device.releaseSubmission(s.reservation)
+	s.reservation = nil
+	if s.fence != 0 {
+		state.ops.destroyFence(state.deviceFns, state.device, s.fence)
+		s.fence = 0
+	}
+	if s.state == submissionPending {
+		s.result = fmt.Errorf("vulki: device closed before submission completion was observed")
+	}
+	s.state = submissionDone
+	s.recorders = nil
+	return nil
+}
+
 type transientSubmission struct {
 	device      *Device
 	pool        vk.CommandPool

@@ -6,9 +6,12 @@
 // uses Vulkan directly through the low-level vk package.
 //
 // Buffer uploads and downloads, DispatchAndWait, and Recorder.SubmitAndWait
-// block until the requested queue work completes. Recorder uploads copy their
-// input immediately, while recorded download destinations become valid after
-// SubmitAndWait succeeds. Device serializes calls that access its Vulkan queue,
+// block until the requested queue work completes. Recorder.Submit and
+// Device.Submit instead return a Submission whose Wait or Poll observes
+// completion later, and Device.Submit carries several recorded batches in one
+// queue submission in argument order. Recorder uploads copy their input
+// immediately, while recorded download destinations become valid only once
+// completion is observed. Device serializes calls that access its Vulkan queue,
 // while submissions using disjoint buffers or only shared read-only buffers may
 // remain in flight concurrently. Overlapping writes retain submission order.
 // Individual child resources and recorders must not be used concurrently with

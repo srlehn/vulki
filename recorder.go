@@ -34,13 +34,11 @@ type Recorder struct {
 	childID     uint64
 	pool        vk.CommandPool
 	command     vk.CommandBuffer
-	fence       vk.Fence
 	state       recorderState
 	buffers     []*Buffer
 	bindingSets []*BindingSet
 	transfers   []recorderTransfer
 	resources   submissionResources
-	reservation *submissionReservation
 }
 
 type recorderTransfer struct {
@@ -250,9 +248,10 @@ func (r *Recorder) Upload(buffer *Buffer, offset uint64, data []byte) error {
 	return nil
 }
 
-// Download records a readback from buffer at byte offset. SubmitAndWait fills
-// destination after GPU completion. The caller must not access or modify
-// destination between Download and the return of SubmitAndWait.
+// Download records a readback from buffer at byte offset. The destination is
+// filled after GPU completion, when SubmitAndWait returns or, after Submit,
+// when Submission.Wait or Submission.Poll observes completion. The caller must
+// not access or modify destination until then.
 func (r *Recorder) Download(buffer *Buffer, offset uint64, destination []byte) error {
 	if r == nil {
 		return fmt.Errorf("vulki: recorder is closed")
@@ -408,60 +407,42 @@ func (r *Recorder) Dispatch(kernel *Kernel, bindings *BindingSet, groups Workgro
 	return nil
 }
 
+// Submit ends recording, submits once without waiting, and hands completion
+// tracking to the returned Submission. It may be called only while recording.
+// After Submit succeeds the Recorder accepts no further commands; the caller
+// must observe completion through Submission.Wait or Submission.Poll before
+// reusing recorded download destinations. On error the recording is aborted
+// and its resources are released.
+func (r *Recorder) Submit() (*Submission, error) {
+	if r == nil {
+		return nil, fmt.Errorf("vulki: recorder is closed")
+	}
+	return r.device.Submit(r)
+}
+
 // SubmitAndWait ends recording, submits once, waits for completion, and closes
 // the Recorder. It may be called only while recording. If submission succeeds
 // but completion cannot be established, referenced resources remain retained
 // until the Device is closed.
 func (r *Recorder) SubmitAndWait() error {
-	if r == nil {
-		return fmt.Errorf("vulki: recorder is closed")
+	submission, err := r.Submit()
+	if err != nil {
+		return err
 	}
+	return submission.Wait()
+}
+
+// completeSubmitted fills recorded download destinations and releases the
+// recorder after its queue submission is known to have completed.
+func (r *Recorder) completeSubmitted(state *deviceState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.requireRecording(); err != nil {
-		return err
+	if r.state != recorderCompletionUnknown {
+		return nil
 	}
-	state, err := r.device.beginOperation()
-	if err != nil {
-		return err
-	}
-	defer r.device.endOperation()
-	if err := state.ops.endCommandBuffer(state.deviceFns, r.command); err != nil {
-		r.finish(state, recorderAborted, recorderRecycleTransfers)
-		return fmt.Errorf("vulki: end recorder command buffer: %w", err)
-	}
-	fenceInfo := vk.FenceCreateInfo{SType: vk.StructureTypeFenceCreateInfo}
-	r.fence, err = state.ops.createFence(state.deviceFns, state.device, &fenceInfo)
-	if err != nil {
-		r.finish(state, recorderAborted, recorderRecycleTransfers)
-		return fmt.Errorf("vulki: create recorder fence: %w", err)
-	}
-	r.reservation, err = r.device.acquireSubmission(r.resources)
-	if err != nil {
-		r.finish(state, recorderAborted, recorderRecycleTransfers)
-		return fmt.Errorf("vulki: reserve recorder resources: %w", err)
-	}
-	submit := vk.SubmitInfo{SType: vk.StructureTypeSubmitInfo, CommandBufferCount: 1, PCommandBuffers: &r.command}
-	err = r.device.submitQueue(state, []vk.SubmitInfo{submit}, r.fence)
-	if err != nil {
-		r.finish(state, recorderAborted, recorderRecycleTransfers)
-		return fmt.Errorf("vulki: submit recorder: %w", err)
-	}
-	r.state = recorderCompletionUnknown
-	err = state.ops.waitForFences(state.deviceFns, state.device, []vk.Fence{r.fence}, true, ^uint64(0))
-	if err != nil {
-		err = classifyDeviceError(err)
-		r.device.markSubmissionUnknown(r.reservation, err)
-		return fmt.Errorf("vulki: wait for recorder completion: %w", err)
-	}
-	r.device.releaseSubmission(r.reservation)
-	r.reservation = nil
-	err = r.readDownloads(state)
+	err := r.readDownloads(state)
 	r.finish(state, recorderSubmitted, recorderRecycleTransfers)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 // Abort discards an unsubmitted recording and releases its resources.
@@ -543,12 +524,6 @@ func (r *Recorder) finish(state *deviceState, final recorderState, disposition r
 }
 
 func (r *Recorder) closeNative(state *deviceState, disposition recorderTransferDisposition) {
-	r.device.releaseSubmission(r.reservation)
-	r.reservation = nil
-	if r.fence != 0 {
-		state.ops.destroyFence(state.deviceFns, state.device, r.fence)
-		r.fence = 0
-	}
 	if r.pool != 0 {
 		state.ops.destroyCommandPool(state.deviceFns, state.device, r.pool)
 		r.pool = 0

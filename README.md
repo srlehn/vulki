@@ -112,10 +112,16 @@ defer kernel.Close()
 Bind concrete buffers with `Kernel.NewBindings`, upload raw bytes through the
 buffer, and call `Device.DispatchAndWait`. Use a `Recorder` to batch arbitrary
 recorded uploads and downloads, aligned inline updates, explicit compute
-barriers, and multiple dispatches into one blocking queue submission. The
-complete checked example is in `cmd/demo`. Compatible submissions from separate
-goroutines may remain in flight together: disjoint buffers and shared read-only
-buffers can overlap, while any overlapping write remains ordered.
+barriers, and multiple dispatches into one queue submission.
+`Recorder.SubmitAndWait` blocks until completion. `Recorder.Submit` instead
+returns a `Submission` handle with non-blocking `Poll` and blocking `Wait`, so
+the next batch can be recorded and submitted while an earlier one executes,
+and `Device.Submit` carries several recorded batches in one fused queue
+submission in argument order. Recorded download destinations become valid only
+once completion is observed. The complete checked example is in `cmd/demo`.
+Compatible submissions from separate goroutines may remain in flight together:
+disjoint buffers and shared read-only buffers can overlap, while any
+overlapping write remains ordered.
 
 Failures keep their Vulkan cause inspectable with `errors.Is`:
 `ErrOutOfDeviceMemory` marks recoverable device memory exhaustion,
