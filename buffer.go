@@ -44,6 +44,11 @@ type deviceOps struct {
 	queueSubmit                  func(*vk.DeviceFuncs, vk.Queue, []vk.SubmitInfo, vk.Fence) error
 	waitForFences                func(*vk.DeviceFuncs, vk.Device, []vk.Fence, bool, uint64) error
 	updateBuffer                 func(*vk.DeviceFuncs, vk.CommandBuffer, vk.Buffer, uint64, []byte) error
+	createQueryPool              func(*vk.DeviceFuncs, vk.Device, *vk.QueryPoolCreateInfo) (vk.QueryPool, error)
+	destroyQueryPool             func(*vk.DeviceFuncs, vk.Device, vk.QueryPool)
+	resetQueryPool               func(*vk.DeviceFuncs, vk.CommandBuffer, vk.QueryPool, uint32, uint32)
+	writeTimestamp               func(*vk.DeviceFuncs, vk.CommandBuffer, vk.PipelineStageFlags, vk.QueryPool, uint32)
+	queryPoolResults             func(*vk.DeviceFuncs, vk.Device, vk.QueryPool, uint32, []uint64, vk.QueryResultFlags) error
 }
 
 var directDeviceOps = deviceOps{
@@ -109,6 +114,21 @@ var directDeviceOps = deviceOps{
 	},
 	updateBuffer: func(functions *vk.DeviceFuncs, command vk.CommandBuffer, buffer vk.Buffer, offset uint64, data []byte) error {
 		return functions.CmdUpdateBuffer(command, buffer, offset, data)
+	},
+	createQueryPool: func(functions *vk.DeviceFuncs, device vk.Device, info *vk.QueryPoolCreateInfo) (vk.QueryPool, error) {
+		return functions.CreateQueryPool(device, info)
+	},
+	destroyQueryPool: func(functions *vk.DeviceFuncs, device vk.Device, pool vk.QueryPool) {
+		functions.DestroyQueryPool(device, pool)
+	},
+	resetQueryPool: func(functions *vk.DeviceFuncs, command vk.CommandBuffer, pool vk.QueryPool, first, count uint32) {
+		functions.CmdResetQueryPool(command, pool, first, count)
+	},
+	writeTimestamp: func(functions *vk.DeviceFuncs, command vk.CommandBuffer, stage vk.PipelineStageFlags, pool vk.QueryPool, query uint32) {
+		functions.CmdWriteTimestamp(command, stage, pool, query)
+	},
+	queryPoolResults: func(functions *vk.DeviceFuncs, device vk.Device, pool vk.QueryPool, first uint32, results []uint64, flags vk.QueryResultFlags) error {
+		return functions.GetQueryPoolResults(device, pool, first, results, flags)
 	},
 }
 

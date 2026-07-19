@@ -93,6 +93,14 @@ func TestDeviceCreateWrappersRejectNilInfo(t *testing.T) {
 			},
 			op: "vkCreateFence",
 		},
+		{
+			name: "query pool",
+			call: func() error {
+				_, err := functions.CreateQueryPool(Device(1), nil)
+				return err
+			},
+			op: "vkCreateQueryPool",
+		},
 	}
 
 	for _, test := range tests {
@@ -288,6 +296,52 @@ func TestCmdUpdateBufferValidation(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("driver calls = %d, want 1", calls)
+	}
+}
+
+func TestGetQueryPoolResultsWrapper(t *testing.T) {
+	functions := &DeviceFuncs{}
+	if err := functions.GetQueryPoolResults(Device(1), QueryPool(2), 0, nil, 0); err == nil {
+		t.Fatal("empty results succeeded")
+	}
+
+	var gotFirst, gotCount uint32
+	var gotSize uintptr
+	var gotStride uint64
+	var gotFlags QueryResultFlags
+	result := Success
+	functions.getQueryPoolResults = func(
+		_ Device, _ QueryPool, firstQuery, queryCount uint32,
+		dataSize uintptr, pData unsafe.Pointer, stride uint64, flags QueryResultFlags,
+	) Result {
+		gotFirst, gotCount = firstQuery, queryCount
+		gotSize, gotStride, gotFlags = dataSize, stride, flags
+		values := unsafe.Slice((*uint64)(pData), queryCount)
+		for index := range values {
+			values[index] = uint64(index + 1)
+		}
+		return result
+	}
+	results := make([]uint64, 3)
+	if err := functions.GetQueryPoolResults(Device(1), QueryPool(2), 4, results, QueryResultWait); err != nil {
+		t.Fatalf("GetQueryPoolResults: %v", err)
+	}
+	if gotFirst != 4 || gotCount != 3 || gotSize != 24 || gotStride != 8 {
+		t.Fatalf("query parameters = first %d count %d size %d stride %d",
+			gotFirst, gotCount, gotSize, gotStride)
+	}
+	if gotFlags&QueryResult64Bit == 0 || gotFlags&QueryResultWait == 0 {
+		t.Fatalf("query flags = %#x, want 64-bit and wait bits", gotFlags)
+	}
+	if results[0] != 1 || results[2] != 3 {
+		t.Fatalf("results = %v, want filled values", results)
+	}
+
+	result = NotReady
+	err := functions.GetQueryPoolResults(Device(1), QueryPool(2), 0, results, 0)
+	var vkErr *Error
+	if !errors.As(err, &vkErr) || vkErr.Result != NotReady {
+		t.Fatalf("pending result error = %v, want inspectable NotReady", err)
 	}
 }
 

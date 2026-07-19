@@ -21,6 +21,11 @@ var ErrDeviceLost = errors.New("vulki: device lost")
 // device stays unavailable until it is closed. Device.Err reports the cause.
 var ErrDeviceUnavailable = errors.New("vulki: cannot submit while earlier queue completion is unknown")
 
+// ErrTimestampsUnsupported matches, via errors.Is, timestamp results requested
+// from a device whose compute queue cannot write usable timestamp queries.
+// Recording timestamp spans on such a device is a harmless no-op.
+var ErrTimestampsUnsupported = errors.New("vulki: device timestamps are unsupported")
+
 // classifiedError attaches a sentinel to an underlying error for errors.Is
 // without changing the error message.
 type classifiedError struct {

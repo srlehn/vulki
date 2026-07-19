@@ -23,6 +23,7 @@ type (
 	DescriptorPool      uintptr
 	DescriptorSet       uintptr
 	Fence               uintptr
+	QueryPool           uintptr
 )
 
 // Result is a Vulkan result or status code.
@@ -141,6 +142,7 @@ const (
 	StructureTypeMemoryAllocateInfo            StructureType = 5
 	StructureTypeMappedMemoryRange             StructureType = 6
 	StructureTypeFenceCreateInfo               StructureType = 8
+	StructureTypeQueryPoolCreateInfo           StructureType = 11
 	StructureTypeBufferCreateInfo              StructureType = 12
 	StructureTypeShaderModuleCreateInfo        StructureType = 16
 	StructureTypePipelineCacheCreateInfo       StructureType = 17
@@ -257,8 +259,10 @@ type PipelineStageFlags uint32
 
 // Pipeline stage flags.
 const (
+	PipelineStageTopOfPipeBit     PipelineStageFlags = 0x00000001
 	PipelineStageComputeShaderBit PipelineStageFlags = 0x00000800
 	PipelineStageTransferBit      PipelineStageFlags = 0x00001000
+	PipelineStageBottomOfPipeBit  PipelineStageFlags = 0x00002000
 	PipelineStageHostBit          PipelineStageFlags = 0x00004000
 )
 
@@ -498,6 +502,36 @@ type FenceCreateInfo struct {
 	SType StructureType
 	PNext uintptr
 	Flags uint32
+}
+
+// QueryType identifies the kind of query a pool contains.
+type QueryType uint32
+
+// Query types.
+const (
+	QueryTypeTimestamp QueryType = 2
+)
+
+// QueryResultFlags controls query result retrieval.
+type QueryResultFlags uint32
+
+// Query result flags.
+const (
+	QueryResult64Bit QueryResultFlags = 0x00000001
+	QueryResultWait  QueryResultFlags = 0x00000002
+)
+
+// QueryPipelineStatisticFlags selects pipeline statistics counters.
+type QueryPipelineStatisticFlags uint32
+
+// QueryPoolCreateInfo mirrors VkQueryPoolCreateInfo.
+type QueryPoolCreateInfo struct {
+	SType              StructureType
+	PNext              uintptr
+	Flags              uint32
+	QueryType          QueryType
+	QueryCount         uint32
+	PipelineStatistics QueryPipelineStatisticFlags
 }
 
 // MemoryRequirements mirrors VkMemoryRequirements.

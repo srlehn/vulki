@@ -101,9 +101,17 @@ type deviceState struct {
 	queueFamily         uint32
 	memory              vk.PhysicalDeviceMemoryProperties
 	nonCoherentAtomSize uint64
+	timestampPeriod     float32
+	timestampValidBits  uint32
 	pipelineCache       *pipelineCacheState
 	ops                 deviceOps
 	kernelOps           kernelOps
+}
+
+// timestampsSupported reports whether the selected compute queue can write
+// usable timestamp queries.
+func (state *deviceState) timestampsSupported() bool {
+	return state != nil && state.timestampValidBits != 0 && state.timestampPeriod > 0
 }
 
 type deviceChild interface {
@@ -255,6 +263,7 @@ func openWithHooksAndPipelineCache(
 			}
 			state.physical = physical
 			state.queueFamily = uint32(index)
+			state.timestampValidBits = family.TimestampValidBits
 			found = true
 			break
 		}
@@ -294,6 +303,7 @@ func openWithHooksAndPipelineCache(
 	state.memory = hooks.memoryProperties(state.instanceFns, state.physical)
 	properties := hooks.deviceProperties(state.instanceFns, state.physical)
 	state.nonCoherentAtomSize = properties.Limits.NonCoherentAtomSize
+	state.timestampPeriod = properties.Limits.TimestampPeriod
 	if cacheFactory != nil {
 		state.pipelineCache = cacheFactory(state.deviceFns, state.device, properties)
 	}

@@ -33,8 +33,14 @@ func BenchmarkSubmissionModes(b *testing.B) {
 		if err != nil {
 			b.Fatalf("NewRecorder: %v", err)
 		}
+		if err := recorder.TimestampBegin("upload"); err != nil {
+			b.Fatalf("TimestampBegin: %v", err)
+		}
 		if err := recorder.Upload(buffer, 0, payload); err != nil {
 			b.Fatalf("Upload: %v", err)
+		}
+		if err := recorder.TimestampEnd("upload"); err != nil {
+			b.Fatalf("TimestampEnd: %v", err)
 		}
 		return recorder
 	}
@@ -68,6 +74,7 @@ func BenchmarkSubmissionModes(b *testing.B) {
 	})
 	b.Run("FusedSingleSubmit", func(b *testing.B) {
 		recorders := make([]*Recorder, batchCount)
+		var gpuNanos float64
 		for range b.N {
 			for index, buffer := range buffers {
 				recorders[index] = record(b, buffer)
@@ -79,6 +86,18 @@ func BenchmarkSubmissionModes(b *testing.B) {
 			if err := submission.Wait(); err != nil {
 				b.Fatalf("Wait: %v", err)
 			}
+			for _, recorder := range recorders {
+				spans, err := recorder.Timestamps()
+				if err != nil {
+					continue
+				}
+				for _, span := range spans {
+					gpuNanos += float64(span.Duration.Nanoseconds())
+				}
+			}
+		}
+		if gpuNanos > 0 {
+			b.ReportMetric(gpuNanos/float64(b.N), "gpu-ns/op")
 		}
 	})
 }

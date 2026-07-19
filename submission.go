@@ -237,6 +237,10 @@ func (d *Device) Submit(recorders ...*Recorder) (*Submission, error) {
 		if err := recorder.requireRecording(); err != nil {
 			return nil, err
 		}
+		if recorder.tsOpen {
+			return nil, fmt.Errorf("vulki: timestamp span %q is not ended",
+				recorder.tsLabels[len(recorder.tsLabels)-1])
+		}
 	}
 	abortAll := func() {
 		for _, recorder := range recorders {

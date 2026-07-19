@@ -39,6 +39,12 @@ type Recorder struct {
 	bindingSets []*BindingSet
 	transfers   []recorderTransfer
 	resources   submissionResources
+	tsPool      vk.QueryPool
+	tsLabels    []string
+	tsOpen      bool
+	tsResolved  bool
+	tsResults   []TimestampSpan
+	tsErr       error
 }
 
 type recorderTransfer struct {
@@ -440,6 +446,7 @@ func (r *Recorder) completeSubmitted(state *deviceState) error {
 	if r.state != recorderCompletionUnknown {
 		return nil
 	}
+	r.resolveTimestamps(state)
 	err := r.readDownloads(state)
 	r.finish(state, recorderSubmitted, recorderRecycleTransfers)
 	return err
@@ -524,6 +531,10 @@ func (r *Recorder) finish(state *deviceState, final recorderState, disposition r
 }
 
 func (r *Recorder) closeNative(state *deviceState, disposition recorderTransferDisposition) {
+	if r.tsPool != 0 {
+		state.ops.destroyQueryPool(state.deviceFns, state.device, r.tsPool)
+		r.tsPool = 0
+	}
 	if r.pool != 0 {
 		state.ops.destroyCommandPool(state.deviceFns, state.device, r.pool)
 		r.pool = 0

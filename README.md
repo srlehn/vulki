@@ -118,7 +118,12 @@ returns a `Submission` handle with non-blocking `Poll` and blocking `Wait`, so
 the next batch can be recorded and submitted while an earlier one executes,
 and `Device.Submit` carries several recorded batches in one fused queue
 submission in argument order. Recorded download destinations become valid only
-once completion is observed. The complete checked example is in `cmd/demo`.
+once completion is observed. `Recorder.TimestampBegin` and
+`Recorder.TimestampEnd` record up to 16 flat labeled GPU timing spans, and
+`Recorder.Timestamps` reports nanoseconds per label once completion is
+observed; devices without usable compute-queue timestamps record nothing and
+report `ErrTimestampsUnsupported`. The complete checked example is in
+`cmd/demo`.
 Compatible submissions from separate goroutines may remain in flight together:
 disjoint buffers and shared read-only buffers can overlap, while any
 overlapping write remains ordered.

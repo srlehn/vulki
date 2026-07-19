@@ -14,6 +14,7 @@ func TestCoreStructABI64(t *testing.T) {
 	testStructSize(t, "InstanceCreateInfo", unsafe.Sizeof(InstanceCreateInfo{}), 64)
 	testStructSize(t, "BufferCreateInfo", unsafe.Sizeof(BufferCreateInfo{}), 56)
 	testStructSize(t, "PipelineCacheCreateInfo", unsafe.Sizeof(PipelineCacheCreateInfo{}), 40)
+	testStructSize(t, "QueryPoolCreateInfo", unsafe.Sizeof(QueryPoolCreateInfo{}), 32)
 	testStructSize(t, "PipelineShaderStageCreateInfo", unsafe.Sizeof(PipelineShaderStageCreateInfo{}), 48)
 	testStructSize(t, "ComputePipelineCreateInfo", unsafe.Sizeof(ComputePipelineCreateInfo{}), 96)
 	testStructSize(t, "WriteDescriptorSet", unsafe.Sizeof(WriteDescriptorSet{}), 64)
@@ -35,6 +36,7 @@ func TestCoreHandleABI64(t *testing.T) {
 	testStructSize(t, "DeviceMemory", unsafe.Sizeof(DeviceMemory(0)), 8)
 	testStructSize(t, "PipelineCache", unsafe.Sizeof(PipelineCache(0)), 8)
 	testStructSize(t, "Pipeline", unsafe.Sizeof(Pipeline(0)), 8)
+	testStructSize(t, "QueryPool", unsafe.Sizeof(QueryPool(0)), 8)
 	if got := unsafe.Alignof(PhysicalDeviceLimits{}); got != 8 {
 		t.Fatalf("alignof(PhysicalDeviceLimits) = %d, want 8", got)
 	}
@@ -53,6 +55,19 @@ func TestPipelineCacheCreateInfoOffsets64(t *testing.T) {
 	testFieldOffset(t, "PipelineCacheCreateInfo.Flags", unsafe.Offsetof(info.Flags), 16)
 	testFieldOffset(t, "PipelineCacheCreateInfo.InitialDataSize", unsafe.Offsetof(info.InitialDataSize), 24)
 	testFieldOffset(t, "PipelineCacheCreateInfo.PInitialData", unsafe.Offsetof(info.PInitialData), 32)
+}
+
+func TestQueryPoolCreateInfoOffsets64(t *testing.T) {
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		t.Skip("vk supports only 64-bit targets")
+	}
+
+	info := QueryPoolCreateInfo{}
+	testFieldOffset(t, "QueryPoolCreateInfo.PNext", unsafe.Offsetof(info.PNext), 8)
+	testFieldOffset(t, "QueryPoolCreateInfo.Flags", unsafe.Offsetof(info.Flags), 16)
+	testFieldOffset(t, "QueryPoolCreateInfo.QueryType", unsafe.Offsetof(info.QueryType), 20)
+	testFieldOffset(t, "QueryPoolCreateInfo.QueryCount", unsafe.Offsetof(info.QueryCount), 24)
+	testFieldOffset(t, "QueryPoolCreateInfo.PipelineStatistics", unsafe.Offsetof(info.PipelineStatistics), 28)
 }
 
 func TestPhysicalDevicePropertiesOffsets64(t *testing.T) {

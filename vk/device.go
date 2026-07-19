@@ -45,6 +45,11 @@ type DeviceFuncs struct {
 	cmdPipelineBarrier           func(cb CommandBuffer, srcStage, dstStage PipelineStageFlags, dependencyFlags uint32, memBarrierCount uint32, pMemBarriers *MemoryBarrier, bufBarrierCount uint32, pBufBarriers *BufferMemoryBarrier, imgBarrierCount uint32, pImgBarriers uintptr)
 	createFence                  func(device Device, pCreateInfo *FenceCreateInfo, pAllocator uintptr, pFence *Fence) Result
 	destroyFence                 func(device Device, fence Fence, pAllocator uintptr)
+	createQueryPool              func(device Device, pCreateInfo *QueryPoolCreateInfo, pAllocator uintptr, pQueryPool *QueryPool) Result
+	destroyQueryPool             func(device Device, queryPool QueryPool, pAllocator uintptr)
+	cmdResetQueryPool            func(cb CommandBuffer, queryPool QueryPool, firstQuery, queryCount uint32)
+	cmdWriteTimestamp            func(cb CommandBuffer, pipelineStage PipelineStageFlags, queryPool QueryPool, query uint32)
+	getQueryPoolResults          func(device Device, queryPool QueryPool, firstQuery, queryCount uint32, dataSize uintptr, pData unsafe.Pointer, stride uint64, flags QueryResultFlags) Result
 	waitForFences                func(device Device, fenceCount uint32, pFences *Fence, waitAll uint32, timeout uint64) Result
 	resetFences                  func(device Device, fenceCount uint32, pFences *Fence) Result
 	resetCommandBuffer           func(cb CommandBuffer, flags CommandBufferResetFlags) Result
@@ -128,6 +133,11 @@ func loadDeviceFuncs(instFuncs *InstanceFuncs, device Device, register func(any,
 		{&f.cmdPipelineBarrier, "vkCmdPipelineBarrier"},
 		{&f.createFence, "vkCreateFence"},
 		{&f.destroyFence, "vkDestroyFence"},
+		{&f.createQueryPool, "vkCreateQueryPool"},
+		{&f.destroyQueryPool, "vkDestroyQueryPool"},
+		{&f.cmdResetQueryPool, "vkCmdResetQueryPool"},
+		{&f.cmdWriteTimestamp, "vkCmdWriteTimestamp"},
+		{&f.getQueryPoolResults, "vkGetQueryPoolResults"},
 		{&f.waitForFences, "vkWaitForFences"},
 		{&f.resetFences, "vkResetFences"},
 		{&f.resetCommandBuffer, "vkResetCommandBuffer"},
@@ -531,6 +541,61 @@ func (f *DeviceFuncs) WaitForFences(device Device, fences []Fence, waitAll bool,
 	res := f.waitForFences(device, uint32(len(fences)), &fences[0], wa, timeout)
 	if res != Success {
 		return resultError("vkWaitForFences", res)
+	}
+	return nil
+}
+
+// CreateQueryPool creates a query pool with nil allocation callbacks. The
+// caller owns the returned pool and must destroy it before destroying device.
+func (f *DeviceFuncs) CreateQueryPool(device Device, info *QueryPoolCreateInfo) (QueryPool, error) {
+	if info == nil {
+		return 0, fmt.Errorf("vk: vkCreateQueryPool requires create info")
+	}
+	var pool QueryPool
+	res := f.createQueryPool(device, info, 0, &pool)
+	if res != Success {
+		return 0, resultError("vkCreateQueryPool", res)
+	}
+	return pool, nil
+}
+
+// DestroyQueryPool destroys a query pool created from device.
+func (f *DeviceFuncs) DestroyQueryPool(device Device, pool QueryPool) {
+	f.destroyQueryPool(device, pool, 0)
+}
+
+// CmdResetQueryPool records a reset of queryCount queries starting at
+// firstQuery. Queries must be reset before their first use after allocation.
+func (f *DeviceFuncs) CmdResetQueryPool(cb CommandBuffer, pool QueryPool, firstQuery, queryCount uint32) {
+	f.cmdResetQueryPool(cb, pool, firstQuery, queryCount)
+}
+
+// CmdWriteTimestamp records a timestamp write into the given query when the
+// single stage bit in stage completes for prior commands.
+func (f *DeviceFuncs) CmdWriteTimestamp(cb CommandBuffer, stage PipelineStageFlags, pool QueryPool, query uint32) {
+	f.cmdWriteTimestamp(cb, stage, pool, query)
+}
+
+// GetQueryPoolResults copies len(results) consecutive 64-bit query values
+// starting at firstQuery into results. QueryResult64Bit is always applied. A
+// pending result is returned as an inspectable *Error with Result NotReady.
+func (f *DeviceFuncs) GetQueryPoolResults(
+	device Device,
+	pool QueryPool,
+	firstQuery uint32,
+	results []uint64,
+	flags QueryResultFlags,
+) error {
+	if len(results) == 0 {
+		return fmt.Errorf("vkGetQueryPoolResults requires at least one result")
+	}
+	res := f.getQueryPoolResults(
+		device, pool, firstQuery, uint32(len(results)),
+		uintptr(len(results))*8, unsafe.Pointer(&results[0]), 8,
+		flags|QueryResult64Bit,
+	)
+	if res != Success {
+		return resultError("vkGetQueryPoolResults", res)
 	}
 	return nil
 }
