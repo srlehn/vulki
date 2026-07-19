@@ -208,6 +208,16 @@ func (state *pipelineCacheState) persist(functions *vk.DeviceFuncs, device vk.De
 		return
 	}
 
+	// A driver pipeline cache only grows in practice, so an unchanged data
+	// size after a warm pipeline creation makes retrieval, hashing, and
+	// writing unnecessary. Keep the warm path at one driver size query.
+	if state.hasLast {
+		size, err := state.driver.data(functions, device, state.cache, nil)
+		if err == nil && int(size) == state.lastSize {
+			return
+		}
+	}
+
 	data, err := retrievePipelineCacheData(functions, device, state.cache, state.driver.data)
 	if err != nil || !validPipelineCacheData(data, state.identity) {
 		return

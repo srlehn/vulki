@@ -245,6 +245,47 @@ func TestPipelineCacheStatePersistsChangedDataOnly(t *testing.T) {
 	}
 }
 
+func TestPipelineCacheStateSizePrecheckSkipsRetrieval(t *testing.T) {
+	identity := pipelineCacheIdentity{vendorID: 1, deviceID: 2, uuid: [16]byte{3}}
+	current := testPipelineCacheData(identity, []byte{4})
+	sizeCalls, dataCalls, writes := 0, 0, 0
+	state := &pipelineCacheState{
+		cache:    vk.PipelineCache(5),
+		identity: identity,
+		path:     "cache.bin",
+		driver: pipelineCacheDriverOps{data: func(_ *vk.DeviceFuncs, _ vk.Device, _ vk.PipelineCache, data []byte) (uintptr, error) {
+			if data == nil {
+				sizeCalls++
+				return uintptr(len(current)), nil
+			}
+			dataCalls++
+			copy(data, current)
+			return uintptr(len(current)), nil
+		}},
+		files: pipelineCacheFileOps{write: func(string, []byte) error {
+			writes++
+			return nil
+		}},
+	}
+	state.remember(current)
+
+	state.persist(nil, vk.Device(1))
+	if sizeCalls != 1 || dataCalls != 0 || writes != 0 {
+		t.Fatalf("warm persist calls: size=%d data=%d writes=%d, want one size query only",
+			sizeCalls, dataCalls, writes)
+	}
+
+	current = testPipelineCacheData(identity, []byte{4, 5})
+	state.persist(nil, vk.Device(1))
+	if dataCalls != 1 || writes != 1 {
+		t.Fatalf("grown persist calls: data=%d writes=%d, want full retrieval and write",
+			dataCalls, writes)
+	}
+	if state.lastSize != len(current) {
+		t.Fatalf("lastSize = %d, want %d", state.lastSize, len(current))
+	}
+}
+
 func TestPipelineCacheStateRetriesFailedWrite(t *testing.T) {
 	identity := pipelineCacheIdentity{vendorID: 1, deviceID: 2, uuid: [16]byte{3}}
 	data := testPipelineCacheData(identity, []byte{4})
